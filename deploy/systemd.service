@@ -1,0 +1,50 @@
+# ---------------------------------------------------------------------------
+# 班级作文工作台 · 后端 systemd 单元（Linux 生产部署）
+#
+# 安装步骤（以 /opt/essay-workbench 部署、运行用户 essay 为例）：
+#   1. 把仓库放到 /opt/essay-workbench，建虚拟环境并安装依赖：
+#        python3 -m venv /opt/essay-workbench/backend/.venv
+#        /opt/essay-workbench/backend/.venv/bin/pip install -e /opt/essay-workbench/backend
+#        /opt/essay-workbench/backend/.venv/bin/playwright install chromium   # PDF 导出必需
+#        # 中文字体（否则 PDF 中文变方框）：
+#        apt-get install -y fonts-noto-cjk
+#   2. 准备数据目录（含密钥，勿入库）：
+#        install -d -o essay -g essay /data/essay-workbench/config
+#        cp config/engines.yaml.example /data/essay-workbench/config/engines.yaml  # 再填真实密钥
+#   3. 安装本单元：
+#        cp deploy/systemd.service /etc/systemd/system/essay-workbench.service
+#        systemctl daemon-reload && systemctl enable --now essay-workbench
+# ---------------------------------------------------------------------------
+[Unit]
+Description=班级作文工作台后端（FastAPI + uvicorn）
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=essay
+Group=essay
+WorkingDirectory=/opt/essay-workbench/backend
+# 数据目录（SQLite / 照片 / 导出 / 配置全部在内，须可写）
+Environment=EWB_DATA_DIR=/data/essay-workbench
+Environment=EWB_WORKER_ENABLED=true
+# 首次启动前请先用 `python -m app.auth hash <口令>` 生成口令哈希写入 app.yaml，
+# 或在此设置 EWB_PASSWORD 作为初始口令（生成后可从 app.yaml 校验）。
+# Environment=EWB_PASSWORD=change-me-on-first-boot
+ExecStart=/opt/essay-workbench/backend/.venv/bin/python -m uvicorn app.main:app \
+    --host 127.0.0.1 --port 8000 --workers 1 --log-level info
+Restart=on-failure
+RestartSec=3
+# 单实例：Worker 为进程内 asyncio 队列，务必 workers=1（多进程会重复消费队列）。
+KillSignal=SIGINT
+TimeoutStopSec=30
+
+# 安全加固
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/data/essay-workbench
+
+[Install]
+WantedBy=multi-user.target

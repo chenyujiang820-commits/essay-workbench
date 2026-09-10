@@ -19,6 +19,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.responses import Response
+from starlette.types import Scope
 
 from app.auth import AuthManager
 from app.config import get_settings
@@ -67,11 +69,28 @@ def register_exception_handlers(app: FastAPI) -> None:
         return _error_response(500, "服务器内部错误", 500)
 
 
+class _SpaStaticFiles(StaticFiles):
+    """SPA 静态托管：未命中的前端深层路由回退到 ``index.html``。
+
+    ``StaticFiles(html=True)`` 只把目录请求映射到 ``index.html``，不会为
+    ``/present/1`` 这类前端路由做回退，直接 404。单端口部署（后端托管前端）下
+    老师收藏/刷新深层链接会白屏，故对非 ``api/`` 前缀的 404 回退到 SPA 入口。
+    """
+
+    async def get_response(self, path: str, scope: Scope) -> Response:
+        try:
+            return await super().get_response(path, scope)
+        except StarletteHTTPException as exc:
+            if exc.status_code == 404 and not path.startswith("api/"):
+                return await super().get_response("index.html", scope)
+            raise
+
+
 def _mount_frontend(app: FastAPI) -> None:
     """若前端已构建，则把 dist 挂到根路径（SPA，放在所有 /api 路由之后）。"""
     dist = Path(__file__).resolve().parents[2] / "frontend" / "dist"
     if dist.is_dir() and (dist / "index.html").exists():
-        app.mount("/", StaticFiles(directory=str(dist), html=True), name="frontend")
+        app.mount("/", _SpaStaticFiles(directory=str(dist), html=True), name="frontend")
 
 
 @asynccontextmanager

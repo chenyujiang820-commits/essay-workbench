@@ -19,6 +19,7 @@ from sqlalchemy.orm import selectinload
 from app.auth import require_auth
 from app.config import AppSettings
 from app.db import get_session
+from app.images import ensure_size, image_size, resolve_extension
 from app.models import Essay, Issue, Photo, RecognitionTask, Student, utcnow_iso
 from app.schemas import (
     ApiError,
@@ -37,23 +38,6 @@ router = APIRouter(prefix="/api", tags=["essays"])
 
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 AuthDep = Annotated[str, Depends(require_auth)]
-
-_MIME_EXTENSION = {
-    "image/jpeg": ".jpg",
-    "image/jpg": ".jpg",
-    "image/pjpeg": ".jpg",
-    "image/png": ".png",
-    "image/webp": ".webp",
-    "image/heic": ".heic",
-    "image/heif": ".heif",
-}
-
-
-def _extension_for(content_type: str | None) -> str:
-    """由 MIME 推断扩展名（缺省 .jpg，符合原片默认 jpg 约定）。"""
-    if not content_type:
-        return ".jpg"
-    return _MIME_EXTENSION.get(content_type.lower(), ".jpg")
 
 
 async def _load_essay(session: AsyncSession, essay_id: int) -> Essay | None:
@@ -82,7 +66,7 @@ async def upload_essay(
     """受理一篇作文的多图上传，落盘原片并投递识别任务。
 
     Raises:
-        ApiError: 404 期数/学生不存在；400 未提供有效照片。
+        ApiError: 404 期数/学生不存在；400 未提供有效照片 / 格式不在白名单 / 单张超过 15MB。
     """
     settings: AppSettings = request.app.state.settings
 
@@ -117,13 +101,18 @@ async def upload_essay(
         content = await upload.read()
         if not content:
             raise ApiError(f"第 {seq} 张照片内容为空", code=400, status_code=400)
-        filename = f"{uuid.uuid4().hex}{_extension_for(upload.content_type)}"
+        ensure_size(len(content))
+        extension = resolve_extension(upload.filename, upload.content_type)
+        dimensions = image_size(content)
+        filename = f"{uuid.uuid4().hex}{extension}"
         (target_dir / filename).write_bytes(content)
         session.add(
             Photo(
                 essay_id=essay.id,
                 seq=seq,
                 file_path=f"photos/{issue_id}/{essay.id}/{filename}",
+                width=dimensions[0] if dimensions else None,
+                height=dimensions[1] if dimensions else None,
                 engine1_text=None,
                 engine2_text=None,
                 diff_json=None,

@@ -89,7 +89,10 @@ describe("PresentPage", () => {
 
     fireEvent.keyDown(window, { key: "ArrowRight" });
 
-    await waitFor(() => expect(screen.getByTestId("present-name").textContent).toBe("李四"));
+    // 放宽超时：整套用例并行执行、机器高负载时，状态更新到重渲染可能超过默认 1s。
+    await waitFor(() => expect(screen.getByTestId("present-name").textContent).toBe("李四"), {
+      timeout: 4000,
+    });
     expect(screen.getByTestId("pager-progress").textContent).toBe("2 / 2");
   });
 

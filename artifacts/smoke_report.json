@@ -1,0 +1,228 @@
+{
+  "started_at": "2026-09-10T16:21:10+00:00",
+  "finished_at": "2026-09-10T16:22:39+00:00",
+  "total_seconds": 89.55,
+  "engine": {
+    "low_confidence_threshold": 0.85,
+    "primary": {
+      "model": "qwen3.8-flash",
+      "timeout": 30,
+      "retries": 2
+    },
+    "review": {
+      "model": "qwen3.7-flash",
+      "timeout": 120,
+      "retries": 2
+    }
+  },
+  "data_dir": "C:\\Users\\15050\\WorkBuddy\\2026-09-10-14-42-14\\essay-workbench\\backend\\data\\smoke",
+  "issue": {
+    "id": 1,
+    "issue_no": 1,
+    "week_start_date": "2026-09-07",
+    "created_at": "2026-09-10T16:21:18+00:00",
+    "essay_count": 0
+  },
+  "student_count": 5,
+  "essays": [
+    {
+      "essay_id": 1,
+      "student_no": "20230101",
+      "name": "张伟",
+      "image": "clipboard-2026-09-10T08-58-01-067Z-0818f656.png",
+      "status": "review",
+      "low_confidence": 0,
+      "photo_count": 1,
+      "photo_sizes": [
+        [
+          600,
+          800
+        ]
+      ],
+      "ocr_chars": [
+        229
+      ],
+      "task_step": "done",
+      "task_error": null,
+      "degraded": false,
+      "upload_s": 0.13,
+      "ocr_s": 8.08,
+      "timed_out": false,
+      "final_chars": 229
+    },
+    {
+      "essay_id": 2,
+      "student_no": "20230102",
+      "name": "李娜",
+      "image": "clipboard-2026-09-10T08-58-01-077Z-e3231fed.jpg",
+      "status": "review",
+      "low_confidence": 0,
+      "photo_count": 1,
+      "photo_sizes": [
+        [
+          1080,
+          1428
+        ]
+      ],
+      "ocr_chars": [
+        818
+      ],
+      "task_step": "done",
+      "task_error": null,
+      "degraded": false,
+      "upload_s": 0.03,
+      "ocr_s": 10.07,
+      "timed_out": false,
+      "final_chars": 818
+    },
+    {
+      "essay_id": 3,
+      "student_no": "20230103",
+      "name": "王芳",
+      "image": "clipboard-2026-09-10T08-58-01-082Z-0e3ea3f7.png",
+      "status": "review",
+      "low_confidence": 0,
+      "photo_count": 1,
+      "photo_sizes": [
+        [
+          550,
+          806
+        ]
+      ],
+      "ocr_chars": [
+        275
+      ],
+      "task_step": "done",
+      "task_error": null,
+      "degraded": false,
+      "upload_s": 0.05,
+      "ocr_s": 14.11,
+      "timed_out": false,
+      "final_chars": 275
+    },
+    {
+      "essay_id": 4,
+      "student_no": "20230104",
+      "name": "刘洋",
+      "image": "clipboard-2026-09-10T08-58-01-090Z-da1fc96f.jpg",
+      "status": "review",
+      "low_confidence": 0,
+      "photo_count": 1,
+      "photo_sizes": [
+        [
+          1080,
+          1368
+        ]
+      ],
+      "ocr_chars": [
+        494
+      ],
+      "task_step": "done",
+      "task_error": null,
+      "degraded": false,
+      "upload_s": 0.03,
+      "ocr_s": 8.08,
+      "timed_out": false,
+      "final_chars": 494
+    },
+    {
+      "essay_id": 5,
+      "student_no": "20230105",
+      "name": "陈静",
+      "image": "clipboard-2026-09-10T08-58-01-094Z-edde4d46.jpg",
+      "status": "review",
+      "low_confidence": 0,
+      "photo_count": 1,
+      "photo_sizes": [
+        [
+          1095,
+          1553
+        ]
+      ],
+      "ocr_chars": [
+        690
+      ],
+      "task_step": "done",
+      "task_error": null,
+      "degraded": false,
+      "upload_s": 0.03,
+      "ocr_s": 12.09,
+      "timed_out": false,
+      "final_chars": 690
+    }
+  ],
+  "exports": [
+    {
+      "template": "elegant",
+      "filename": "样例作文集-elegant.pdf",
+      "bytes": 398263,
+      "seconds": 13.65
+    },
+    {
+      "template": "playful",
+      "filename": "样例作文集-playful.pdf",
+      "bytes": 443827,
+      "seconds": 9.79
+    },
+    {
+      "template": "formal",
+      "filename": "样例作文集-formal.pdf",
+      "bytes": 210885,
+      "seconds": 4.57
+    }
+  ],
+  "degraded": false,
+  "steps": [
+    {
+      "step": "prepare",
+      "detail": "隔离数据目录 C:\\Users\\15050\\WorkBuddy\\2026-09-10-14-42-14\\essay-workbench\\backend\\data\\smoke",
+      "seconds": 0.04
+    },
+    {
+      "step": "seed",
+      "detail": "完成：新增 5 人，更新 0 人；数据目录 = C:\\Users\\15050\\WorkBuddy\\2026-09-10-14-42-14\\essay-workbench\\backend\\data\\smoke（DB = C:\\Users\\15050\\WorkBuddy\\2026-09-10-14-42-14\\essay-workbench\\backend\\data\\smoke\\essay.db）",
+      "seconds": 4.23
+    },
+    {
+      "step": "serve",
+      "detail": "uvicorn 就绪 @ http://127.0.0.1:56421",
+      "seconds": 4.02
+    },
+    {
+      "step": "login",
+      "detail": "登录取 token",
+      "seconds": 0.14
+    },
+    {
+      "step": "students",
+      "detail": "启用学生 5 人",
+      "seconds": 0.01
+    },
+    {
+      "step": "issue",
+      "detail": "建期 #1 (id=1)",
+      "seconds": 0.03
+    },
+    {
+      "step": "recognize",
+      "detail": "5 篇完成真实识别",
+      "seconds": 52.43
+    },
+    {
+      "step": "proofread",
+      "detail": "5 篇定稿",
+      "seconds": 0.16
+    },
+    {
+      "step": "export",
+      "detail": "导出三套模板 PDF",
+      "seconds": 28.01
+    }
+  ],
+  "notes": [],
+  "for_screenshots": {
+    "base_url": "http://127.0.0.1:56421",
+    "issue_id": 1,
+    "first_essay_id": 1
+  }
+}

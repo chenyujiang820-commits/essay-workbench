@@ -188,15 +188,6 @@ class UploadResult(BaseModel):
 # ---------------------------------------------------------------------------
 # 导出
 # ---------------------------------------------------------------------------
-class ExportReadiness(BaseModel):
-    """成册前置校验结果。"""
-
-    issue_id: int
-    essay_count: int
-    ready: bool
-    templates: list[str] = Field(default_factory=list)
-
-
 class TemplateInfo(BaseModel):
     """成册模板清单项。"""
 
@@ -230,9 +221,6 @@ class ExportRequest(BaseModel):
 
     template: str = Field(default="elegant", description="模板 key")
     order: str = Field(default="student_no", description="student_no | name")
-
-
-DEFAULT_TEMPLATES = ["elegant", "playful", "formal"]
 
 
 # ---------------------------------------------------------------------------

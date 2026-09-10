@@ -140,7 +140,8 @@ export default function DiffText({
           ))
         ) : (
           <p className="text-sm text-slate-500">
-            暂无 diff 数据（复核引擎可能已降级），请直接对照左侧原片核对并在下方编辑。
+            暂无 diff 数据（本篇识别置信度较高、复核引擎未介入，或复核未返回文本），
+            请直接对照左侧原片核对并在下方编辑。
           </p>
         )}
       </section>
