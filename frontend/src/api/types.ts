@@ -12,6 +12,13 @@ export interface LoginResult {
   expires_in: number;
 }
 
+export interface Student {
+  id: number;
+  student_no: string;
+  name: string;
+  active: number;
+}
+
 export type DiffType = "equal" | "replace" | "delete" | "insert";
 
 export interface DiffSegment {
@@ -47,6 +54,9 @@ export interface Issue {
   essay_count: number;
 }
 
+/** 作文状态机：uploaded → recognizing → review → proofread | failed。 */
+export type EssayStatus = "uploaded" | "recognizing" | "review" | "proofread" | "failed";
+
 export interface EssaySummary {
   id: number;
   issue_id: number;
@@ -66,4 +76,19 @@ export interface EssayDetail extends EssaySummary {
   selected: number;
   photos: Photo[];
   task: RecognitionTaskInfo | null;
+}
+
+export interface UploadResult {
+  essay_id: number;
+  status: string;
+  photo_count: number;
+  task: RecognitionTaskInfo | null;
+}
+
+/** 处于「识别中」的状态集合（看板据此轮询）。 */
+export const RECOGNIZING_STATUSES: ReadonlyArray<string> = ["uploaded", "recognizing"];
+
+/** 判断作文是否仍在识别中（需要轮询）。 */
+export function isRecognizing(status: string): boolean {
+  return RECOGNIZING_STATUSES.includes(status);
 }

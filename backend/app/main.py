@@ -24,7 +24,7 @@ from app.auth import AuthManager
 from app.config import get_settings
 from app.db import create_engine, create_session_factory, init_db
 from app.pipeline.worker import build_worker
-from app.routers import auth_router, essays, exports, issues
+from app.routers import auth_router, essays, exports, issues, photos, students
 from app.schemas import ApiError
 
 logger = logging.getLogger(__name__)
@@ -126,7 +126,9 @@ def create_app() -> FastAPI:
 
     application.include_router(auth_router.router)
     application.include_router(issues.router)
+    application.include_router(students.router)
     application.include_router(essays.router)
+    application.include_router(photos.router)
     application.include_router(exports.router)
 
     @application.get("/api/health", tags=["meta"])

@@ -5,7 +5,15 @@
  * 任何 HTTP 非 2xx 或 code !== 0 都抛出 ApiError。
  */
 
-import type { Envelope, LoginResult } from "./types";
+import type {
+  Envelope,
+  EssayDetail,
+  EssaySummary,
+  Issue,
+  LoginResult,
+  Student,
+  UploadResult,
+} from "./types";
 
 const TOKEN_KEY = "ewb_token";
 const API_BASE = "/api";
@@ -46,12 +54,17 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const headers = new Headers(init.headers);
+function authHeaders(init?: HeadersInit): Headers {
+  const headers = new Headers(init);
   const token = readToken();
   if (token) {
     headers.set("Authorization", `Bearer ${token}`);
   }
+  return headers;
+}
+
+async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const headers = authHeaders(init.headers);
   if (init.body && !(init.body instanceof FormData)) {
     headers.set("Content-Type", "application/json");
   }
@@ -74,12 +87,90 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   return (payload as Envelope<T>).data as T;
 }
 
+/** 获取二进制资源（如原片），失败时仍尽力解析错误信封文案。 */
+async function requestBlob(path: string): Promise<Blob> {
+  const response = await fetch(`${API_BASE}${path}`, { headers: authHeaders() });
+  if (!response.ok) {
+    let message = `请求失败（HTTP ${response.status}）`;
+    let code = response.status;
+    try {
+      const payload = (await response.json()) as Envelope<unknown>;
+      if (payload?.message) {
+        message = payload.message;
+        code = payload.code ?? code;
+      }
+    } catch {
+      /* 非 JSON 响应，沿用默认文案 */
+    }
+    throw new ApiError(message, code, response.status);
+  }
+  return response.blob();
+}
+
 export const api = {
   login(password: string): Promise<LoginResult> {
     return request<LoginResult>("/auth/login", {
       method: "POST",
       body: JSON.stringify({ password }),
     });
+  },
+
+  // -- 期数 ----------------------------------------------------------------
+  listIssues(): Promise<Issue[]> {
+    return request<Issue[]>("/issues");
+  },
+
+  createIssue(issueNo: number, weekStartDate: string): Promise<Issue> {
+    return request<Issue>("/issues", {
+      method: "POST",
+      body: JSON.stringify({ issue_no: issueNo, week_start_date: weekStartDate }),
+    });
+  },
+
+  getIssue(issueId: number): Promise<Issue> {
+    return request<Issue>(`/issues/${issueId}`);
+  },
+
+  // -- 学生 ----------------------------------------------------------------
+  listStudents(): Promise<Student[]> {
+    return request<Student[]>("/students");
+  },
+
+  // -- 作文 ----------------------------------------------------------------
+  listIssueEssays(issueId: number): Promise<EssaySummary[]> {
+    return request<EssaySummary[]>(`/issues/${issueId}/essays`);
+  },
+
+  getEssay(essayId: number): Promise<EssayDetail> {
+    return request<EssayDetail>(`/essays/${essayId}`);
+  },
+
+  updateEssay(
+    essayId: number,
+    payload: { final_text: string; proofread: boolean },
+  ): Promise<EssayDetail> {
+    return request<EssayDetail>(`/essays/${essayId}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    });
+  },
+
+  /** 多图一次提交一篇作文（multipart：student_id + files[]）。 */
+  uploadEssay(issueId: number, studentId: number, files: File[]): Promise<UploadResult> {
+    const form = new FormData();
+    form.append("student_id", String(studentId));
+    for (const file of files) {
+      form.append("files", file, file.name);
+    }
+    return request<UploadResult>(`/issues/${issueId}/essays`, {
+      method: "POST",
+      body: form,
+    });
+  },
+
+  // -- 原片 ----------------------------------------------------------------
+  fetchPhotoBlob(photoId: number): Promise<Blob> {
+    return requestBlob(`/photos/${photoId}/file`);
   },
 };
 

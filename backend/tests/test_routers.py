@@ -349,3 +349,43 @@ async def test_essay_and_issue_lookup_404(
         await client.patch("/api/issues/987654", json={"issue_no": 5}, headers=auth_headers)
     ).status_code == 404
     assert (await client.delete("/api/issues/987654", headers=auth_headers)).status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# 学生名单（只读）
+# ---------------------------------------------------------------------------
+async def test_students_requires_auth(client: AsyncClient) -> None:
+    response = await client.get("/api/students")
+    assert response.status_code == 401
+
+
+async def test_students_list_sorted_by_student_no(
+    client: AsyncClient,
+    auth_headers: dict[str, str],
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    await create_student(session_factory, student_no="S002", name="李四")
+    await create_student(session_factory, student_no="S001", name="张三")
+
+    response = await client.get("/api/students", headers=auth_headers)
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["code"] == 0
+    assert [item["student_no"] for item in payload["data"]] == ["S001", "S002"]
+    assert payload["data"][0]["name"] == "张三"
+    assert payload["data"][0]["active"] == 1
+
+
+async def test_students_excludes_inactive(
+    client: AsyncClient,
+    auth_headers: dict[str, str],
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with session_factory() as session:
+        session.add(
+            Student(student_no="S900", name="已离校", active=0, created_at=utcnow_iso())
+        )
+        await session.commit()
+
+    response = await client.get("/api/students", headers=auth_headers)
+    assert response.json()["data"] == []
