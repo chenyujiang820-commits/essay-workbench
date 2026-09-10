@@ -88,13 +88,27 @@ export default function EssayListPage() {
         <h1 className="text-xl font-semibold text-slate-900">
           状态看板{issue ? ` · 第 ${issue.issue_no} 期` : ""}
         </h1>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <button
             type="button"
             onClick={() => navigate(`/issues/${issueId}/upload`)}
             className="rounded-md border border-slate-300 px-3 py-1.5 text-sm text-slate-700"
           >
             拍照上传
+          </button>
+          <button
+            type="button"
+            onClick={() => navigate(`/issues/${issueId}/book`)}
+            className="rounded-md border border-slate-300 px-3 py-1.5 text-sm text-slate-700"
+          >
+            成册导出
+          </button>
+          <button
+            type="button"
+            onClick={() => navigate(`/present/${issueId}`)}
+            className="rounded-md border border-slate-300 px-3 py-1.5 text-sm text-slate-700"
+          >
+            讲评投屏
           </button>
           <button
             type="button"

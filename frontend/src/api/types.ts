@@ -92,3 +92,31 @@ export const RECOGNIZING_STATUSES: ReadonlyArray<string> = ["uploaded", "recogni
 export function isRecognizing(status: string): boolean {
   return RECOGNIZING_STATUSES.includes(status);
 }
+
+// ---------------------------------------------------------------------------
+// 成册导出 / 投屏（T04）
+// ---------------------------------------------------------------------------
+export interface TemplateInfo {
+  key: string;
+  name: string;
+  description: string;
+}
+
+/** 成册排序方式：学号 / 姓名（score 为二期预留，前端置灰）。 */
+export type ExportOrder = "student_no" | "name";
+
+export interface BookItem {
+  student_no: string;
+  name: string;
+  title: string;
+  paragraphs: string[];
+  is_selected: boolean;
+}
+
+export interface PresentData {
+  class_name: string;
+  issue_no: number;
+  week_start_date: string;
+  generated_at: string;
+  items: BookItem[];
+}

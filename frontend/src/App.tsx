@@ -20,7 +20,7 @@ export default function App() {
         <Route path="/issues/:issueId/essays" element={<EssayListPage />} />
         <Route path="/essays/:essayId/proofread" element={<ProofreadPage />} />
         <Route path="/issues/:issueId/book" element={<BookPage />} />
-        <Route path="/issues/:issueId/present" element={<PresentPage />} />
+        <Route path="/present/:issueId" element={<PresentPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

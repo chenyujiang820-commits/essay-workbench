@@ -1,11 +1,234 @@
-import PlaceholderPage from "../components/PlaceholderPage";
+/**
+ * 成册预览与导出：模板切换（所见即所得 iframe 预览）、排序（学号/姓名，评分二期置灰）、
+ * 校对铁律禁用（未全定稿不可导出）、整册 PDF 与单篇版式下载。
+ */
 
-/** 成册预览 + 模板切换 + 导出 PDF（T04 实现）。 */
+import { useCallback, useEffect, useState } from "react";
+import { useNavigate, useParams } from "react-router-dom";
+
+import { ApiError, api } from "../api/client";
+import type { EssaySummary, ExportOrder, Issue, TemplateInfo } from "../api/types";
+import TemplatePicker from "../components/TemplatePicker";
+import { bookFileName, singleFileName, triggerDownload } from "../lib/download";
+import { formatDate } from "../lib/date";
+
 export default function BookPage() {
+  const { issueId } = useParams();
+  const navigate = useNavigate();
+  const numericIssueId = Number(issueId);
+
+  const [issue, setIssue] = useState<Issue | null>(null);
+  const [essays, setEssays] = useState<EssaySummary[]>([]);
+  const [templates, setTemplates] = useState<TemplateInfo[]>([]);
+  const [template, setTemplate] = useState("elegant");
+  const [order, setOrder] = useState<ExportOrder>("student_no");
+  const [preview, setPreview] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const pendingCount = essays.filter((essay) => essay.status !== "proofread").length;
+  const canExport = essays.length > 0 && pendingCount === 0;
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const [issueData, list, templateList] = await Promise.all([
+        api.getIssue(numericIssueId),
+        api.listIssueEssays(numericIssueId),
+        api.listTemplates(),
+      ]);
+      setIssue(issueData);
+      setEssays(list);
+      setTemplates(templateList);
+      setTemplate((previous) =>
+        templateList.some((item) => item.key === previous) ? previous : templateList[0]?.key ?? previous,
+      );
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "成册页加载失败");
+    } finally {
+      setLoading(false);
+    }
+  }, [numericIssueId]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  // 预览：模板 / 排序变化即刷新（与 PDF 同一套模板）。
+  useEffect(() => {
+    if (essays.length === 0) {
+      setPreview("");
+      return;
+    }
+    let cancelled = false;
+    api
+      .fetchExportPreview(numericIssueId, { template, order })
+      .then((html) => {
+        if (!cancelled) {
+          setPreview(html);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setPreview("");
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [numericIssueId, template, order, essays.length]);
+
+  async function handleExportBook(): Promise<void> {
+    setBusy(true);
+    setError("");
+    try {
+      const blob = await api.exportBook(numericIssueId, { template, order });
+      triggerDownload(blob, bookFileName(issue?.issue_no ?? numericIssueId));
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "导出失败，请重试");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleExportSingle(essay: EssaySummary): Promise<void> {
+    setBusy(true);
+    setError("");
+    try {
+      const blob = await api.exportSingle(numericIssueId, essay.id, template);
+      triggerDownload(
+        blob,
+        singleFileName(issue?.issue_no ?? numericIssueId, essay.student_name ?? "", essay.title),
+      );
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "单篇导出失败，请重试");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
-    <PlaceholderPage
-      title="成册与导出"
-      description="3 套模板（素雅 / 童趣 / 正式）一键切换，全部定稿后导出中文 PDF（未全定稿则禁用）。"
-    />
+    <main className="mx-auto max-w-6xl px-4 py-6 sm:px-6 sm:py-8">
+      <header className="flex flex-wrap items-center justify-between gap-3">
+        <h1 className="text-xl font-semibold text-slate-900">
+          成册与导出{issue ? ` · 第 ${issue.issue_no} 期` : ""}
+        </h1>
+        <button
+          type="button"
+          onClick={() => navigate(`/issues/${issueId}/essays`)}
+          className="text-sm text-slate-500"
+        >
+          返回看板
+        </button>
+      </header>
+
+      {error ? (
+        <p className="mt-4 rounded-md bg-rose-50 px-4 py-3 text-sm text-rose-600">{error}</p>
+      ) : null}
+
+      <section className="mt-5 grid gap-5 lg:grid-cols-[320px_1fr]">
+        <div className="flex flex-col gap-4">
+          <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+            <p className="text-sm font-medium text-slate-700">模板</p>
+            <div className="mt-2">
+              <TemplatePicker
+                templates={templates}
+                value={template}
+                onChange={setTemplate}
+                disabled={busy}
+              />
+            </div>
+
+            <label className="mt-4 block text-sm font-medium text-slate-700" htmlFor="order">
+              排序
+            </label>
+            <select
+              id="order"
+              data-testid="order-select"
+              className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 outline-none focus:border-slate-500"
+              value={order}
+              onChange={(event) => setOrder(event.target.value as ExportOrder)}
+            >
+              <option value="student_no">按学号</option>
+              <option value="name">按姓名</option>
+              <option value="score" disabled title="评分排序将在二期开放">
+                按评分（二期开放）
+              </option>
+            </select>
+            <p className="mt-1 text-xs text-slate-400">评分排序将在二期开放。</p>
+
+            <button
+              type="button"
+              data-testid="export-book"
+              disabled={!canExport || busy}
+              onClick={handleExportBook}
+              className="mt-4 w-full rounded-md bg-slate-900 px-4 py-2.5 text-base font-medium text-white disabled:opacity-50"
+            >
+              {busy ? "处理中…" : "导出整册 PDF"}
+            </button>
+            {!canExport ? (
+              <p data-testid="export-hint" className="mt-2 text-xs text-amber-600">
+                {essays.length === 0
+                  ? "本期暂无作文，无法成册。"
+                  : `还有 ${pendingCount} 篇未校对定稿，暂时无法成册。`}
+              </p>
+            ) : (
+              <p className="mt-2 text-xs text-emerald-600">已全部定稿，可导出（共 {essays.length} 篇）。</p>
+            )}
+          </div>
+
+          <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+            <p className="text-sm font-medium text-slate-700">单篇版式（打印张贴）</p>
+            {essays.length === 0 ? (
+              <p className="mt-2 text-xs text-slate-400">暂无作文</p>
+            ) : (
+              <ul className="mt-2 flex flex-col gap-2">
+                {essays.map((essay) => (
+                  <li key={essay.id} className="flex items-center justify-between gap-2">
+                    <span className="truncate text-sm text-slate-700">
+                      {essay.student_name ?? `#${essay.student_id}`}
+                      {essay.title ? ` · ${essay.title}` : ""}
+                    </span>
+                    <button
+                      type="button"
+                      disabled={essay.status !== "proofread" || busy}
+                      onClick={() => handleExportSingle(essay)}
+                      className="shrink-0 rounded-md border border-slate-300 px-2.5 py-1 text-xs text-slate-700 disabled:opacity-40"
+                    >
+                      单篇 PDF
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </div>
+
+        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="flex items-center justify-between">
+            <p className="text-sm font-medium text-slate-700">预览（A4）</p>
+            {issue ? (
+              <p className="text-xs text-slate-400">周一起 {formatDate(issue.week_start_date)}</p>
+            ) : null}
+          </div>
+          {loading ? (
+            <p className="mt-3 text-sm text-slate-500">加载中…</p>
+          ) : preview ? (
+            <div className="mt-3 overflow-auto rounded-md border border-slate-200 bg-slate-50 p-2">
+              <iframe
+                title="成册预览"
+                data-testid="book-preview"
+                srcDoc={preview}
+                className="mx-auto block h-[70vh] w-full max-w-[820px] bg-white"
+              />
+            </div>
+          ) : (
+            <p className="mt-3 text-sm text-slate-500">暂无可预览内容。</p>
+          )}
+        </div>
+      </section>
+    </main>
   );
 }

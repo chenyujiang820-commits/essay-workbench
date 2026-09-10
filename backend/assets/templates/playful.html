@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>{{ class_name }} · 第 {{ issue_no }} 期</title>
+    <style>
+      @page { size: A4 portrait; margin: 16mm 14mm 20mm; }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; padding: 0; }
+      body {
+        font-family: {{ font_stack | safe }};
+        font-size: 12pt;
+        line-height: 1.85;
+        color: #27303f;
+        background: #fff;
+      }
+      .cover {
+        page-break-after: always;
+        min-height: 240mm;
+        border: 4px dashed #fbbf24;
+        border-radius: 10mm;
+        margin: 4mm;
+        padding: 16mm;
+        text-align: center;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+      }
+      .cover .cls {
+        display: inline-block;
+        background: #fde68a;
+        color: #92400e;
+        padding: 2mm 8mm;
+        border-radius: 999px;
+        font-size: 15pt;
+      }
+      .cover h1 {
+        font-size: 32pt;
+        margin: 12mm 0 4mm;
+        color: #ea580c;
+      }
+      .cover .week { font-size: 13pt; color: #64748b; }
+      .cover .foot { margin-top: 20mm; font-size: 10pt; color: #94a3b8; }
+      .toc { page-break-after: always; }
+      .toc h2 {
+        font-size: 18pt;
+        color: #0f766e;
+        border-bottom: 3px solid #5eead4;
+        padding-bottom: 3mm;
+      }
+      .toc ul { list-style: none; margin: 6mm 0 0; padding: 0; }
+      .toc li {
+        display: flex;
+        justify-content: space-between;
+        gap: 6mm;
+        background: #f0fdfa;
+        border-radius: 4mm;
+        padding: 3mm 4mm;
+        margin-bottom: 3mm;
+      }
+      .toc li .n { color: #0f766e; }
+      .essay { page-break-before: always; }
+      .card {
+        border: 2px solid #fdba74;
+        border-radius: 6mm;
+        padding: 8mm;
+      }
+      .essay .bar {
+        background: linear-gradient(90deg, #fb923c, #f472b6);
+        color: #fff;
+        border-radius: 5mm;
+        padding: 4mm 6mm;
+        margin-bottom: 6mm;
+      }
+      .essay h2.title { font-size: 20pt; margin: 0; }
+      .badge {
+        display: inline-block;
+        margin-left: 3mm;
+        padding: 0.6mm 3mm;
+        border-radius: 999px;
+        background: #fff;
+        color: #db2777;
+        font-size: 9pt;
+        vertical-align: middle;
+      }
+      .chip {
+        display: inline-block;
+        background: #e0f2fe;
+        color: #0369a1;
+        border-radius: 999px;
+        padding: 1mm 5mm;
+        font-size: 11pt;
+        margin-bottom: 6mm;
+      }
+      .essay .body p { margin: 0 0 4mm; text-indent: 2em; }
+      .essay .empty { color: #94a3b8; text-indent: 0; }
+      .single { page-break-before: avoid; }
+      .colophon { margin-top: 16mm; text-align: center; color: #94a3b8; font-size: 10pt; }
+    </style>
+  </head>
+  <body>
+    {% if mode == 'single' %}
+    <article class="essay single">
+      <div class="card">
+        <div class="bar">
+          <h2 class="title">{{ item.title or '无题' }}{% if item.is_selected %}<span class="badge">★ 精选</span>{% endif %}</h2>
+        </div>
+        <div class="chip">{{ item.name }}{% if item.student_no %} · {{ item.student_no }}{% endif %}</div>
+        <div class="body">
+          {% for p in item.paragraphs %}<p>{{ p }}</p>{% else %}<p class="empty">（正文待补）</p>{% endfor %}
+        </div>
+      </div>
+      <div class="colophon">{{ class_name }} · 第 {{ issue_no }} 期</div>
+    </article>
+    {% else %}
+    <section class="cover">
+      <div class="cls">{{ class_name }}</div>
+      <h1>第 {{ issue_no }} 期作文集</h1>
+      <div class="week">周一起 {{ week_start_date }} · 共 {{ items | length }} 篇</div>
+      <div class="foot">生成于 {{ generated_at }}</div>
+    </section>
+
+    <section class="toc">
+      <h2>本 期 目 录</h2>
+      <ul>
+        {% for item in items %}
+        <li>
+          <span>{{ item.name }}{% if item.is_selected %} <span class="badge">★ 精选</span>{% endif %}</span>
+          <span class="n">{{ item.title or '无题' }}</span>
+        </li>
+        {% endfor %}
+      </ul>
+    </section>
+
+    {% for item in items %}
+    <article class="essay">
+      <div class="card">
+        <div class="bar">
+          <h2 class="title">{{ item.title or '无题' }}{% if item.is_selected %}<span class="badge">★ 精选</span>{% endif %}</h2>
+        </div>
+        <div class="chip">{{ item.name }}{% if item.student_no %} · {{ item.student_no }}{% endif %}</div>
+        <div class="body">
+          {% for p in item.paragraphs %}<p>{{ p }}</p>{% else %}<p class="empty">（正文待补）</p>{% endfor %}
+        </div>
+      </div>
+    </article>
+    {% endfor %}
+    {% endif %}
+  </body>
+</html>

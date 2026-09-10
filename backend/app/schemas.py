@@ -189,12 +189,47 @@ class UploadResult(BaseModel):
 # 导出
 # ---------------------------------------------------------------------------
 class ExportReadiness(BaseModel):
-    """成册前置校验结果（T04 接入 PDF 渲染）。"""
+    """成册前置校验结果。"""
 
     issue_id: int
     essay_count: int
     ready: bool
     templates: list[str] = Field(default_factory=list)
+
+
+class TemplateInfo(BaseModel):
+    """成册模板清单项。"""
+
+    key: str
+    name: str
+    description: str
+
+
+class BookItemOut(BaseModel):
+    """成册/投屏共用条目。"""
+
+    student_no: str = ""
+    name: str = ""
+    title: str = ""
+    paragraphs: list[str] = Field(default_factory=list)
+    is_selected: bool = False
+
+
+class PresentOut(BaseModel):
+    """投屏数据：把该期定稿作文渲染成逐篇结构。"""
+
+    class_name: str
+    issue_no: int
+    week_start_date: str
+    generated_at: str
+    items: list[BookItemOut] = Field(default_factory=list)
+
+
+class ExportRequest(BaseModel):
+    """整册导出请求。"""
+
+    template: str = Field(default="elegant", description="模板 key")
+    order: str = Field(default="student_no", description="student_no | name")
 
 
 DEFAULT_TEMPLATES = ["elegant", "playful", "formal"]

@@ -20,6 +20,8 @@ dependencies = [
     "httpx>=0.27",
     "python-multipart>=0.0.9",
     "pyyaml>=6.0.1",
+    "jinja2>=3.1",
+    "playwright>=1.45",
 ]
 
 [project.optional-dependencies]
@@ -81,6 +83,9 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 addopts = "-q"
 pythonpath = ["."]
+markers = [
+    "slow: 较慢用例（启动无头浏览器等）",
+]
 
 [tool.coverage.run]
 source = ["app"]

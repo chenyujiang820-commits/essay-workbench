@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>{{ class_name }} · 第 {{ issue_no }} 期</title>
+    <style>
+      @page { size: A4 portrait; margin: 18mm 16mm 22mm; }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; padding: 0; }
+      body {
+        font-family: {{ font_stack | safe }};
+        font-size: 12pt;
+        line-height: 1.85;
+        color: #1f2937;
+      }
+      /* 封面 */
+      .cover {
+        page-break-after: always;
+        min-height: 235mm;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        text-align: center;
+      }
+      .cover .cls { font-size: 18pt; letter-spacing: 0.4em; color: #475569; }
+      .cover h1 { font-size: 34pt; margin: 12mm 0 4mm; letter-spacing: 0.25em; font-weight: 600; }
+      .cover .rule { width: 64mm; height: 1px; background: #94a3b8; margin: 10mm 0; }
+      .cover .week { font-size: 13pt; color: #64748b; }
+      .cover .foot { margin-top: 26mm; font-size: 10pt; color: #94a3b8; }
+      /* 目录 */
+      .toc { page-break-after: always; }
+      .toc h2 { font-size: 18pt; margin: 0 0 6mm; padding-bottom: 3mm; border-bottom: 1px solid #cbd5e1; }
+      .toc ol { list-style: none; margin: 0; padding: 0; }
+      .toc li {
+        display: flex;
+        justify-content: space-between;
+        gap: 6mm;
+        padding: 2.4mm 0;
+        border-bottom: 1px dotted #e2e8f0;
+      }
+      .toc li .t { color: #334155; }
+      .toc li .n { color: #94a3b8; font-size: 11pt; }
+      /* 每篇 */
+      .essay { page-break-before: always; }
+      .essay h2.title { font-size: 20pt; text-align: center; margin: 0 0 3mm; font-weight: 600; }
+      .essay .author { text-align: center; color: #64748b; font-size: 11pt; margin-bottom: 9mm; }
+      .essay .body p { margin: 0 0 4mm; text-indent: 2em; }
+      .essay .empty { color: #94a3b8; text-indent: 0; }
+      .badge {
+        display: inline-block;
+        margin-left: 3mm;
+        padding: 0.6mm 3mm;
+        border-radius: 999px;
+        background: #f59e0b;
+        color: #fff;
+        font-size: 9pt;
+        vertical-align: middle;
+      }
+      /* 单篇版式：铺满一页、无封面目录 */
+      .single { page-break-before: avoid; }
+      .single h2.title { font-size: 24pt; margin-top: 6mm; }
+      .single .body p { font-size: 13pt; line-height: 1.9; }
+      .colophon { margin-top: 20mm; text-align: center; color: #94a3b8; font-size: 10pt; }
+    </style>
+  </head>
+  <body>
+    {% if mode == 'single' %}
+    <article class="essay single">
+      <h2 class="title">{{ item.title or '无题' }}{% if item.is_selected %}<span class="badge">精选</span>{% endif %}</h2>
+      <div class="author">{{ item.name }}{% if item.student_no %} · {{ item.student_no }}{% endif %}</div>
+      <div class="body">
+        {% for p in item.paragraphs %}<p>{{ p }}</p>{% else %}<p class="empty">（正文待补）</p>{% endfor %}
+      </div>
+      <div class="colophon">{{ class_name }} · 第 {{ issue_no }} 期 · {{ generated_at }}</div>
+    </article>
+    {% else %}
+    <section class="cover">
+      <div class="cls">{{ class_name }}</div>
+      <h1>第 {{ issue_no }} 期作文集</h1>
+      <div class="rule"></div>
+      <div class="week">周一起 {{ week_start_date }} · 共 {{ items | length }} 篇</div>
+      <div class="foot">生成于 {{ generated_at }}</div>
+    </section>
+
+    <section class="toc">
+      <h2>目 录</h2>
+      <ol>
+        {% for item in items %}
+        <li>
+          <span class="t">{{ item.name }}{% if item.is_selected %}<span class="badge">精选</span>{% endif %}</span>
+          <span class="n">{{ item.title or '无题' }}</span>
+        </li>
+        {% endfor %}
+      </ol>
+    </section>
+
+    {% for item in items %}
+    <article class="essay">
+      <h2 class="title">{{ item.title or '无题' }}{% if item.is_selected %}<span class="badge">精选</span>{% endif %}</h2>
+      <div class="author">{{ item.name }}{% if item.student_no %} · {{ item.student_no }}{% endif %}</div>
+      <div class="body">
+        {% for p in item.paragraphs %}<p>{{ p }}</p>{% else %}<p class="empty">（正文待补）</p>{% endfor %}
+      </div>
+    </article>
+    {% endfor %}
+    {% endif %}
+  </body>
+</html>

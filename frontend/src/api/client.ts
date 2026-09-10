@@ -11,7 +11,9 @@ import type {
   EssaySummary,
   Issue,
   LoginResult,
+  PresentData,
   Student,
+  TemplateInfo,
   UploadResult,
 } from "./types";
 
@@ -87,9 +89,13 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   return (payload as Envelope<T>).data as T;
 }
 
-/** 获取二进制资源（如原片），失败时仍尽力解析错误信封文案。 */
-async function requestBlob(path: string): Promise<Blob> {
-  const response = await fetch(`${API_BASE}${path}`, { headers: authHeaders() });
+/** 获取二进制资源（如原片/PDF），失败时仍尽力解析错误信封文案。 */
+async function requestBlob(path: string, init: RequestInit = {}): Promise<Blob> {
+  const headers = authHeaders(init.headers);
+  if (init.body && !(init.body instanceof FormData)) {
+    headers.set("Content-Type", "application/json");
+  }
+  const response = await fetch(`${API_BASE}${path}`, { ...init, headers });
   if (!response.ok) {
     let message = `请求失败（HTTP ${response.status}）`;
     let code = response.status;
@@ -105,6 +111,27 @@ async function requestBlob(path: string): Promise<Blob> {
     throw new ApiError(message, code, response.status);
   }
   return response.blob();
+}
+
+/** 获取文本资源（如成册预览 HTML），失败时解析错误信封文案。 */
+async function requestText(path: string, init: RequestInit = {}): Promise<string> {
+  const headers = authHeaders(init.headers);
+  const response = await fetch(`${API_BASE}${path}`, { ...init, headers });
+  if (!response.ok) {
+    let message = `请求失败（HTTP ${response.status}）`;
+    let code = response.status;
+    try {
+      const payload = (await response.json()) as Envelope<unknown>;
+      if (payload?.message) {
+        message = payload.message;
+        code = payload.code ?? code;
+      }
+    } catch {
+      /* 忽略 */
+    }
+    throw new ApiError(message, code, response.status);
+  }
+  return response.text();
 }
 
 export const api = {
@@ -171,6 +198,42 @@ export const api = {
   // -- 原片 ----------------------------------------------------------------
   fetchPhotoBlob(photoId: number): Promise<Blob> {
     return requestBlob(`/photos/${photoId}/file`);
+  },
+
+  // -- 成册导出 / 投屏 ----------------------------------------------------
+  listTemplates(): Promise<TemplateInfo[]> {
+    return request<TemplateInfo[]>("/exports/templates");
+  },
+
+  /** 渲染整册 HTML（iframe 预览用，与 PDF 同一套模板）。 */
+  fetchExportPreview(
+    issueId: number,
+    options: { template: string; order: string },
+  ): Promise<string> {
+    const query = new URLSearchParams({ template: options.template, order: options.order });
+    return requestText(`/exports/${issueId}/preview?${query.toString()}`);
+  },
+
+  /** 投屏数据（逐篇 name/title/paragraphs）。 */
+  fetchPresent(issueId: number, order = "student_no"): Promise<PresentData> {
+    const query = new URLSearchParams({ order });
+    return request<PresentData>(`/exports/${issueId}/present?${query.toString()}`);
+  },
+
+  /** 导出整册 PDF。 */
+  exportBook(issueId: number, options: { template: string; order: string }): Promise<Blob> {
+    return requestBlob(`/exports/${issueId}`, {
+      method: "POST",
+      body: JSON.stringify(options),
+    });
+  },
+
+  /** 导出单篇版式 PDF。 */
+  exportSingle(issueId: number, essayId: number, template: string): Promise<Blob> {
+    const query = new URLSearchParams({ template });
+    return requestBlob(`/exports/${issueId}/single/${essayId}?${query.toString()}`, {
+      method: "POST",
+    });
   },
 };
 

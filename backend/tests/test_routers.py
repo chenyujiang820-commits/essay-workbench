@@ -172,11 +172,12 @@ async def test_upload_detail_and_proofread(
     assert saved_data["proofread_at"] is not None
     assert saved_data["final_text"] == "春天的校园里，玉兰花开了。"
 
-    # 全部定稿后可成册
+    # 全部定稿后可成册（T04：导出为整册 PDF 字节流）
     ready = await client.post(f"/api/exports/{issue_id}", headers=auth_headers)
     assert ready.status_code == 200
-    assert ready.json()["data"]["ready"] is True
-    assert ready.json()["data"]["essay_count"] == 1
+    assert ready.headers["content-type"] == "application/pdf"
+    assert "attachment" in ready.headers["content-disposition"]
+    assert ready.content[:5] == b"%PDF-"
 
 
 async def test_upload_requires_student_and_files(
