@@ -1,0 +1,20 @@
+# ---------------------------------------------------------------------------
+# 应用配置示例（app.yaml.example）
+#
+# 使用方法：
+#   复制到数据目录：<EWB_DATA_DIR>/config/app.yaml
+#   （开发环境默认 backend/data/config/app.yaml）
+#
+# 说明：
+#   * 首次启动时若 app.yaml 缺失，程序会自动生成一份（口令取环境变量
+#     EWB_PASSWORD，未设置则用默认口令 admin123），并生成随机 token_secret。
+#   * password_hash 为 PBKDF2-SHA256 哈希，格式：
+#         pbkdf2_sha256$<iterations>$<salt_hex>$<digest_hex>
+#     可用命令生成：python -m app.auth hash <新口令>
+#   * token_secret 请务必保密；修改后所有已签发 token 失效。
+# ---------------------------------------------------------------------------
+
+auth:
+  password_hash: "pbkdf2_sha256$200000$REPLACE_SALT_HEX$REPLACE_DIGEST_HEX"
+  token_secret: "REPLACE_WITH_RANDOM_SECRET"
+  token_ttl_seconds: 604800   # 7 天

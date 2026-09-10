@@ -1,0 +1,30 @@
+# ---------------------------------------------------------------------------
+# 识别引擎配置示例（engines.yaml.example）
+#
+# 使用方法：
+#   1. 复制本文件到数据目录：<EWB_DATA_DIR>/config/engines.yaml
+#      （开发环境默认 EWB_DATA_DIR=./data，即 backend/data/config/engines.yaml）
+#   2. 填入真实 base_url / api_key / model。
+#   3. engines.yaml 已被 .gitignore 忽略，API Key 绝不入库。
+#
+# 兼容 OpenAI Chat Completions 协议的服务均可接入（OpenAI / 兼容网关 / 私有部署）。
+# ---------------------------------------------------------------------------
+
+# 整篇置信度低于该阈值即判定为「低置信」，触发复核引擎（默认 0.85，可调）。
+low_confidence_threshold: 0.85
+
+# 主识别引擎：快通道，短超时、低成本模型。
+primary:
+  base_url: "https://api.openai.com/v1"
+  api_key: "REPLACE_WITH_PRIMARY_API_KEY"
+  model: "gpt-4o-mini"
+  timeout: 30          # 秒
+  retries: 2           # 首次失败后的重试次数（总尝试 = retries + 1）
+
+# 复核引擎：慢通道，长超时、更强模型，仅在主引擎低置信时调用。
+review:
+  base_url: "https://api.openai.com/v1"
+  api_key: "REPLACE_WITH_REVIEW_API_KEY"
+  model: "gpt-4o"
+  timeout: 120         # 秒
+  retries: 2

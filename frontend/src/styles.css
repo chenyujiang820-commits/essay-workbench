@@ -1,0 +1,35 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  @apply bg-slate-50 text-slate-900 antialiased;
+}
+
+/* 投屏视图：1920x1080 横版、大字号、深底白字 */
+.present-screen {
+  @apply flex min-h-screen w-full flex-col items-center justify-center bg-slate-950 px-16 py-12 text-white;
+}
+
+.present-text {
+  @apply whitespace-pre-wrap text-present-lg font-medium leading-relaxed tracking-wide;
+}
+
+/* 校对页：存疑黄底高亮 */
+.diff-suspect {
+  @apply rounded bg-amber-200 px-0.5 text-slate-900;
+}
+
+.diff-suspect-b {
+  @apply rounded bg-rose-200 px-0.5 text-slate-900;
+}
