@@ -7,8 +7,8 @@
  * * 有未保存修改时离开页面需二次确认。
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useBlocker, useNavigate, useParams } from "react-router-dom";
 
 import { ApiError, api } from "../api/client";
 import type { EssayDetail, Photo } from "../api/types";
@@ -69,6 +69,7 @@ export default function ProofreadPage() {
   const [pane, setPane] = useState<"photo" | "text">("photo");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
   const [error, setError] = useState("");
 
   const load = useCallback(async () => {
@@ -104,6 +105,25 @@ export default function ProofreadPage() {
 
   const dirty = value !== initialText;
 
+  // 保存成功后的返回跳转不算「未保存离开」（ref 即时读取，不受渲染时序影响）。
+  const savedNavRef = useRef(false);
+
+  // SPA 内路由离开（含浏览器返回键 / 手机手势返回）统一拦截确认。
+  const blocker = useBlocker(({ currentLocation, nextLocation }) => {
+    return !savedNavRef.current && dirty && currentLocation.pathname !== nextLocation.pathname;
+  });
+
+  useEffect(() => {
+    if (blocker.state !== "blocked") {
+      return;
+    }
+    if (window.confirm("有未保存的修改，确定离开而不保存吗？")) {
+      blocker.proceed();
+    } else {
+      blocker.reset();
+    }
+  }, [blocker]);
+
   // 关闭/刷新浏览器标签时的二次确认。
   useEffect(() => {
     if (!dirty) {
@@ -118,9 +138,7 @@ export default function ProofreadPage() {
   }, [dirty]);
 
   function handleBack(): void {
-    if (dirty && !window.confirm("有未保存的修改，确定离开而不保存吗？")) {
-      return;
-    }
+    // 未保存确认由 useBlocker 统一处理（按钮与手势返回同一条路径）。
     navigate(`/issues/${essay?.issue_id ?? ""}/essays`);
   }
 
@@ -138,7 +156,10 @@ export default function ProofreadPage() {
       });
       setEssay(saved);
       setInitialText(value);
-      navigate(`/issues/${saved.issue_id}/essays`);
+      savedNavRef.current = true;
+      // 给一句可见的成功反馈，再返回看板。
+      setSaved(true);
+      window.setTimeout(() => navigate(`/issues/${saved.issue_id}/essays`), 600);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "保存失败，请重试");
     } finally {
@@ -156,28 +177,47 @@ export default function ProofreadPage() {
         <p className="rounded-md bg-rose-50 px-4 py-3 text-sm text-rose-600">
           {error || "作文不存在"}
         </p>
-        <button
-          type="button"
-          onClick={() => navigate(-1)}
-          className="mt-4 text-sm text-slate-500 underline"
-        >
-          返回
-        </button>
+        <div className="mt-4 flex gap-2">
+          <button
+            type="button"
+            onClick={() => void load()}
+            className="rounded-md border border-slate-300 px-3 py-1.5 text-sm text-slate-700"
+          >
+            重试
+          </button>
+          <button
+            type="button"
+            onClick={() => navigate("/")}
+            className="rounded-md border border-slate-300 px-3 py-1.5 text-sm text-slate-700"
+          >
+            返回首页
+          </button>
+        </div>
       </main>
     );
   }
 
   return (
-    <main className="mx-auto flex h-screen max-w-7xl flex-col px-3 py-4 sm:px-4">
+    <main className="mx-auto flex h-dvh max-w-7xl flex-col px-3 py-4 sm:px-4">
       <header className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => navigate("/")}
+            data-testid="back-home"
+            className="rounded-md border border-slate-300 px-3 py-1.5 text-sm text-slate-700"
+          >
+            期数列表
+          </button>
           <button
             type="button"
             onClick={handleBack}
             className="rounded-md border border-slate-300 px-3 py-1.5 text-sm text-slate-700"
           >
-            返回看板
+            ← 看板
           </button>
+        </div>
           <h1 className="text-lg font-semibold text-slate-900">
             逐句校对 · {essay.student_name ?? `#${essay.student_id}`}
           </h1>
@@ -205,6 +245,12 @@ export default function ProofreadPage() {
 
       {error ? (
         <p className="mt-3 rounded-md bg-rose-50 px-4 py-2 text-sm text-rose-600">{error}</p>
+      ) : null}
+
+      {saved ? (
+        <p className="mt-3 rounded-md bg-emerald-50 px-4 py-2 text-sm text-emerald-700">
+          已定稿保存成功，正在返回看板…
+        </p>
       ) : null}
 
       <div className="mt-3 flex gap-2 lg:hidden">

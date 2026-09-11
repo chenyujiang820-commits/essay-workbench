@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { RouterProvider, createMemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { api } from "../api/client";
@@ -64,14 +64,15 @@ const detail: EssayDetail = {
 };
 
 function renderProofread() {
-  return render(
-    <MemoryRouter initialEntries={["/essays/3/proofread"]}>
-      <Routes>
-        <Route path="/essays/:essayId/proofread" element={<ProofreadPage />} />
-        <Route path="/issues/:issueId/essays" element={<div>看板页</div>} />
-      </Routes>
-    </MemoryRouter>,
+  // 数据路由（createMemoryRouter）：ProofreadPage 的 useBlocker 依赖 data router 上下文。
+  const router = createMemoryRouter(
+    [
+      { path: "/essays/:essayId/proofread", element: <ProofreadPage /> },
+      { path: "/issues/:issueId/essays", element: <div>看板页</div> },
+    ],
+    { initialEntries: ["/essays/3/proofread"] },
   );
+  return render(<RouterProvider router={router} />);
 }
 
 describe("ProofreadPage", () => {
@@ -112,12 +113,37 @@ describe("ProofreadPage", () => {
     await waitFor(() => expect(screen.getByText("未保存")).toBeTruthy());
 
     const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
-    fireEvent.click(screen.getByRole("button", { name: "返回看板" }));
+    fireEvent.click(screen.getByRole("button", { name: "← 看板" }));
     expect(confirmSpy).toHaveBeenCalledTimes(1);
     expect(screen.queryByText("看板页")).toBeNull();
 
     confirmSpy.mockReturnValue(true);
-    fireEvent.click(screen.getByRole("button", { name: "返回看板" }));
+    fireEvent.click(screen.getByRole("button", { name: "← 看板" }));
+    await waitFor(() => expect(screen.getByText("看板页")).toBeTruthy());
+
+    confirmSpy.mockRestore();
+  });
+
+  it("blocks in-app navigation (browser back / swipe-back) with unsaved changes", async () => {
+    const router = createMemoryRouter(
+      [
+        { path: "/essays/:essayId/proofread", element: <ProofreadPage /> },
+        { path: "/issues/:issueId/essays", element: <div>看板页</div> },
+      ],
+      { initialEntries: ["/essays/3/proofread"] },
+    );
+    render(<RouterProvider router={router} />);
+    const textarea = (await screen.findByTestId("final-text")) as HTMLTextAreaElement;
+    fireEvent.change(textarea, { target: { value: "改过的定稿文字" } });
+    await waitFor(() => expect(screen.getByText("未保存")).toBeTruthy());
+
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+    router.navigate("/issues/1/essays");
+    await waitFor(() => expect(confirmSpy).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText("看板页")).toBeNull();
+
+    confirmSpy.mockReturnValue(true);
+    router.navigate("/issues/1/essays");
     await waitFor(() => expect(screen.getByText("看板页")).toBeTruthy());
 
     confirmSpy.mockRestore();
@@ -137,6 +163,8 @@ describe("ProofreadPage", () => {
         proofread: true,
       }),
     );
-    await waitFor(() => expect(screen.getByText("看板页")).toBeTruthy());
+    // 保存成功先有可见反馈，再自动返回看板。
+    expect(await screen.findByText("已定稿保存成功，正在返回看板…")).toBeTruthy();
+    await waitFor(() => expect(screen.getByText("看板页")).toBeTruthy(), { timeout: 4000 });
   });
 });

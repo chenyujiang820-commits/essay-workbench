@@ -91,6 +91,14 @@ export default function EssayListPage() {
         <div className="flex flex-wrap gap-2">
           <button
             type="button"
+            onClick={() => navigate("/")}
+            data-testid="back-home"
+            className="rounded-md border border-slate-300 px-3 py-1.5 text-sm text-slate-700"
+          >
+            ← 期数列表
+          </button>
+          <button
+            type="button"
             onClick={() => navigate(`/issues/${issueId}/upload`)}
             className="rounded-md border border-slate-300 px-3 py-1.5 text-sm text-slate-700"
           >
@@ -115,7 +123,7 @@ export default function EssayListPage() {
             onClick={() => void load()}
             className="rounded-md border border-slate-300 px-3 py-1.5 text-sm text-slate-700"
           >
-            刷新
+            立即刷新
           </button>
         </div>
       </header>
@@ -128,6 +136,7 @@ export default function EssayListPage() {
         <p>
           共 <span className="font-semibold text-slate-900">{essays.length}</span> 篇 ·
           <span className="font-semibold text-slate-900"> {counts.length}</span> 名学生
+          <span className="ml-2 text-xs text-slate-400">识别中作文每 3 秒自动刷新</span>
         </p>
         {counts.length > 0 ? (
           <ul className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-500">

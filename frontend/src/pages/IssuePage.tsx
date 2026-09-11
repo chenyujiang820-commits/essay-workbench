@@ -20,6 +20,7 @@ export default function IssuePage() {
   const [issueNo, setIssueNo] = useState("");
   const [weekStart, setWeekStart] = useState(mondayIso());
   const [creating, setCreating] = useState(false);
+  const [notice, setNotice] = useState("");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -46,9 +47,11 @@ export default function IssuePage() {
     }
     setCreating(true);
     setError("");
+    setNotice("");
     try {
       await api.createIssue(parsed, weekStart);
       setIssueNo("");
+      setNotice(`第 ${parsed} 期创建成功，可在下方进入。`);
       await load();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "新建失败，请重试");
@@ -117,6 +120,10 @@ export default function IssuePage() {
           </button>
         </div>
       </form>
+
+      {notice ? (
+        <p className="mt-4 rounded-md bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{notice}</p>
+      ) : null}
 
       {error ? (
         <p className="mt-4 rounded-md bg-rose-50 px-4 py-3 text-sm text-rose-600">{error}</p>

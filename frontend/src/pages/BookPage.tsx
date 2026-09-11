@@ -8,9 +8,12 @@ import { useNavigate, useParams } from "react-router-dom";
 
 import { ApiError, api } from "../api/client";
 import type { EssaySummary, ExportOrder, Issue, TemplateInfo } from "../api/types";
+import PreviewFrame from "../components/PreviewFrame";
 import TemplatePicker from "../components/TemplatePicker";
 import { bookFileName, singleFileName, triggerDownload } from "../lib/download";
 import { formatDate } from "../lib/date";
+
+type PreviewState = "empty" | "loading" | "ready" | "error";
 
 export default function BookPage() {
   const { issueId } = useParams();
@@ -23,6 +26,8 @@ export default function BookPage() {
   const [template, setTemplate] = useState("elegant");
   const [order, setOrder] = useState<ExportOrder>("student_no");
   const [preview, setPreview] = useState("");
+  const [previewState, setPreviewState] = useState<PreviewState>("loading");
+  const [previewRetry, setPreviewRetry] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -56,29 +61,33 @@ export default function BookPage() {
     void load();
   }, [load]);
 
-  // 预览：模板 / 排序变化即刷新（与 PDF 同一套模板）。
+  // 预览：模板 / 排序变化即刷新（与 PDF 同一套模板）；带 loading / 失败重试状态。
   useEffect(() => {
     if (essays.length === 0) {
       setPreview("");
+      setPreviewState("empty");
       return;
     }
     let cancelled = false;
+    setPreviewState("loading");
     api
       .fetchExportPreview(numericIssueId, { template, order })
       .then((html) => {
         if (!cancelled) {
           setPreview(html);
+          setPreviewState("ready");
         }
       })
       .catch(() => {
         if (!cancelled) {
           setPreview("");
+          setPreviewState("error");
         }
       });
     return () => {
       cancelled = true;
     };
-  }, [numericIssueId, template, order, essays.length]);
+  }, [numericIssueId, template, order, essays.length, previewRetry]);
 
   async function handleExportBook(): Promise<void> {
     setBusy(true);
@@ -115,13 +124,23 @@ export default function BookPage() {
         <h1 className="text-xl font-semibold text-slate-900">
           成册与导出{issue ? ` · 第 ${issue.issue_no} 期` : ""}
         </h1>
-        <button
-          type="button"
-          onClick={() => navigate(`/issues/${issueId}/essays`)}
-          className="text-sm text-slate-500"
-        >
-          返回看板
-        </button>
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={() => navigate("/")}
+            data-testid="back-home"
+            className="rounded-md border border-slate-300 px-3 py-1.5 text-sm text-slate-700"
+          >
+            期数列表
+          </button>
+          <button
+            type="button"
+            onClick={() => navigate(`/issues/${issueId}/essays`)}
+            className="rounded-md border border-slate-300 px-3 py-1.5 text-sm text-slate-700"
+          >
+            ← 看板
+          </button>
+        </div>
       </header>
 
       {error ? (
@@ -215,15 +234,27 @@ export default function BookPage() {
           </div>
           {loading ? (
             <p className="mt-3 text-sm text-slate-500">加载中…</p>
-          ) : preview ? (
-            <div className="mt-3 overflow-auto rounded-md border border-slate-200 bg-slate-50 p-2">
-              <iframe
-                title="成册预览"
-                data-testid="book-preview"
-                srcDoc={preview}
-                className="mx-auto block h-[70vh] w-full max-w-[820px] bg-white"
-              />
+          ) : previewState === "loading" ? (
+            <div
+              data-testid="preview-loading"
+              className="mt-3 flex h-[70vh] items-center justify-center rounded-md border border-slate-200 bg-slate-50 text-sm text-slate-500"
+            >
+              预览生成中…
             </div>
+          ) : previewState === "error" ? (
+            <div className="mt-3 flex h-[70vh] flex-col items-center justify-center gap-3 rounded-md border border-slate-200 bg-slate-50 text-sm text-slate-500">
+              预览加载失败，请重试。
+              <button
+                type="button"
+                data-testid="preview-retry"
+                onClick={() => setPreviewRetry((tick) => tick + 1)}
+                className="rounded-md border border-slate-300 px-3 py-1.5 text-sm text-slate-700"
+              >
+                重试
+              </button>
+            </div>
+          ) : preview ? (
+            <PreviewFrame html={preview} />
           ) : (
             <p className="mt-3 text-sm text-slate-500">暂无可预览内容。</p>
           )}

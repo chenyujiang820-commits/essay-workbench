@@ -36,6 +36,8 @@ function renderUpload() {
 describe("UploadPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    Object.defineProperty(URL, "createObjectURL", { value: vi.fn(() => "blob:thumb"), writable: true });
+    Object.defineProperty(URL, "revokeObjectURL", { value: vi.fn(), writable: true });
     vi.mocked(api.getIssue).mockResolvedValue({
       id: 1,
       issue_no: 1,
@@ -48,14 +50,27 @@ describe("UploadPage", () => {
     ]);
   });
 
-  it("exposes a mobile camera input accepting multiple images", async () => {
+  it("exposes a mobile image input accepting multiple images without forcing the camera", async () => {
     renderUpload();
     const input = (await screen.findByTestId("photo-input")) as HTMLInputElement;
 
     expect(input.getAttribute("accept")).toBe("image/*");
-    expect(input.getAttribute("capture")).toBe("environment");
+    // 不再强制调起相机：老师也可从相册选择已拍好的照片
+    expect(input.getAttribute("capture")).toBeNull();
     expect(input.multiple).toBe(true);
     expect(input.getAttribute("type")).toBe("file");
+  });
+
+  it("shows an error when image compression fails instead of failing silently", async () => {
+    const { compressImages } = await import("../lib/image");
+    vi.mocked(compressImages).mockRejectedValueOnce(new Error("decode failed"));
+    renderUpload();
+
+    fireEvent.change(await screen.findByTestId("photo-input"), {
+      target: { files: [new File([new Uint8Array([1])], "a.jpg", { type: "image/jpeg" })] },
+    });
+
+    await waitFor(() => expect(screen.getByText("图片处理失败，请重试或换一张照片")).toBeTruthy());
   });
 
   it("submits all selected images as a single essay payload", async () => {
@@ -83,6 +98,27 @@ describe("UploadPage", () => {
     await waitFor(() => expect(api.uploadEssay).toHaveBeenCalledTimes(1));
     expect(api.uploadEssay).toHaveBeenCalledWith(1, 7, [first, second]);
     await waitFor(() => expect(screen.getByText(/已上传识别中/)).toBeTruthy());
+  });
+
+  it("shows thumbnails and allows removing a single photo", async () => {
+    renderUpload();
+
+    await screen.findByRole("option", { name: /张三/ });
+    fireEvent.change(screen.getByTestId("photo-input"), {
+      target: { files: [new File([new Uint8Array([1])], "a.jpg", { type: "image/jpeg" })] },
+    });
+    fireEvent.change(screen.getByTestId("photo-input"), {
+      target: { files: [new File([new Uint8Array([2])], "b.jpg", { type: "image/jpeg" })] },
+    });
+
+    await waitFor(() => expect(screen.getByText("已选 2 张：")).toBeTruthy());
+    expect(screen.getAllByTestId("photo-input")).toBeTruthy();
+    const thumbs = screen.getAllByRole("img", { name: /已选第/ });
+    expect(thumbs.length).toBe(2);
+
+    fireEvent.click(screen.getByRole("button", { name: "删除第 1 张" }));
+    await waitFor(() => expect(screen.getByText("已选 1 张：")).toBeTruthy());
+    expect(screen.getAllByRole("img", { name: /已选第/ }).length).toBe(1);
   });
 
   it("blocks submission until a student is chosen", async () => {

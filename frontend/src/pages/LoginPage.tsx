@@ -1,5 +1,5 @@
 import { FormEvent, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 
 import { ApiError, api } from "../api/client";
 import { useAppStore } from "../store";
@@ -7,6 +7,7 @@ import { useAppStore } from "../store";
 /** 口令登录页（适配手机）。 */
 export default function LoginPage() {
   const navigate = useNavigate();
+  const location = useLocation();
   const setToken = useAppStore((state) => state.setToken);
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
@@ -19,7 +20,9 @@ export default function LoginPage() {
     try {
       const result = await api.login(password);
       setToken(result.token);
-      navigate("/", { replace: true });
+      // 会话过期被重定向过来时，登录后回到原目标页。
+      const from = (location.state as { from?: string } | null)?.from ?? "/";
+      navigate(from, { replace: true });
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "登录失败，请重试");
     } finally {

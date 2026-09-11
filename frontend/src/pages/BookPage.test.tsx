@@ -101,6 +101,19 @@ describe("BookPage", () => {
     expect(scoreOption?.disabled).toBe(true);
   });
 
+  it("shows a retryable error state when the preview fails to load", async () => {
+    vi.mocked(api.listIssueEssays).mockResolvedValue([essay(1, "proofread", "张三", "春天")]);
+    vi.mocked(api.fetchExportPreview).mockRejectedValueOnce(new Error("boom"));
+    renderBook();
+
+    await screen.findByTestId("export-book");
+    expect(await screen.findByText(/预览加载失败/)).toBeTruthy();
+
+    vi.mocked(api.fetchExportPreview).mockResolvedValue("<html><body>预览</body></html>");
+    fireEvent.click(screen.getByTestId("preview-retry"));
+    await waitFor(() => expect(screen.getByTestId("book-preview")).toBeTruthy());
+  });
+
   it("refreshes the preview when the template changes", async () => {
     vi.mocked(api.listIssueEssays).mockResolvedValue([essay(1, "proofread", "张三", "春天")]);
     renderBook();
