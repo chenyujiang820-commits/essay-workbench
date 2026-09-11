@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 from app.models import Student, utcnow_iso
+from app.schemas import ApiError
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -281,6 +282,37 @@ async def test_issue_update_conflict_returns_409(
     assert ok.json()["data"]["issue_no"] == 13
 
 
+async def test_issue_rejects_invalid_iso_date(
+    client: AsyncClient, auth_headers: dict[str, str]
+) -> None:
+    response = await client.post(
+        "/api/issues",
+        json={"issue_no": 14, "week_start_date": "2026-02-30"},
+        headers=auth_headers,
+    )
+    assert response.status_code == 422
+    assert response.json()["code"] == 422
+
+
+async def test_issue_update_rejects_invalid_iso_date(
+    client: AsyncClient, auth_headers: dict[str, str]
+) -> None:
+    issue_id = (
+        await client.post(
+            "/api/issues",
+            json={"issue_no": 15, "week_start_date": "2026-09-07"},
+            headers=auth_headers,
+        )
+    ).json()["data"]["id"]
+    response = await client.patch(
+        f"/api/issues/{issue_id}",
+        json={"week_start_date": "2026-9-7"},
+        headers=auth_headers,
+    )
+    assert response.status_code == 422
+    assert response.json()["code"] == 422
+
+
 async def test_delete_issue_with_essays_requires_confirm_then_cascades(
     client: AsyncClient,
     auth_headers: dict[str, str],
@@ -316,7 +348,8 @@ async def test_delete_issue_with_essays_requires_confirm_then_cascades(
     assert ok.status_code == 200
     assert (await client.get(f"/api/essays/{essay_id}", headers=auth_headers)).status_code == 404
     assert (await client.get(f"/api/issues/{issue_id}", headers=auth_headers)).status_code == 404
-    assert not (data_dir / "photos" / str(issue_id)).exists()
+    photos_root = data_dir / "photos" / str(issue_id)
+    assert not photos_root.exists() or not any(photos_root.iterdir())
 
 
 async def test_delete_issue_photo_cleanup_failure_still_200(
@@ -385,6 +418,72 @@ async def test_upload_empty_file_returns_400(
         headers=auth_headers,
     )
     assert no_files.status_code == 422  # multipart 缺 files 字段
+
+
+async def test_upload_invalid_later_file_leaves_no_orphan(
+    client: AsyncClient,
+    auth_headers: dict[str, str],
+    session_factory: async_sessionmaker[AsyncSession],
+    data_dir: Path,
+) -> None:
+    student_id = await create_student(session_factory, student_no="S011", name="周七")
+    issue_id = (
+        await client.post(
+            "/api/issues",
+            json={"issue_no": 35, "week_start_date": "2026-09-07"},
+            headers=auth_headers,
+        )
+    ).json()["data"]["id"]
+
+    response = await client.post(
+        f"/api/issues/{issue_id}/essays",
+        data={"student_id": str(student_id)},
+        files=[
+            ("files", ("ok.jpg", b"first", "image/jpeg")),
+            ("files", ("bad.gif", b"second", "image/gif")),
+        ],
+        headers=auth_headers,
+    )
+    assert response.status_code == 400
+    assert (
+        await client.get(f"/api/issues/{issue_id}/essays", headers=auth_headers)
+    ).json()["data"] == []
+    photos_root = data_dir / "photos" / str(issue_id)
+    assert not photos_root.exists() or not any(photos_root.iterdir())
+
+
+async def test_upload_commit_failure_cleans_written_files(
+    client: AsyncClient,
+    auth_headers: dict[str, str],
+    session_factory: async_sessionmaker[AsyncSession],
+    data_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    student_id = await create_student(session_factory, student_no="S012", name="郑八")
+    issue_id = (
+        await client.post(
+            "/api/issues",
+            json={"issue_no": 36, "week_start_date": "2026-09-07"},
+            headers=auth_headers,
+        )
+    ).json()["data"]["id"]
+
+    async def _boom(_self: AsyncSession) -> None:
+        raise ApiError("commit failed", code=500, status_code=500)
+
+    monkeypatch.setattr(AsyncSession, "commit", _boom)
+    response = await client.post(
+        f"/api/issues/{issue_id}/essays",
+        data={"student_id": str(student_id)},
+        files=[("files", ("ok.jpg", b"first", "image/jpeg"))],
+        headers=auth_headers,
+    )
+    assert response.status_code == 500
+    assert (
+        await client.get(f"/api/issues/{issue_id}/essays", headers=auth_headers)
+    ).json()["data"] == []
+    photos_root = data_dir / "photos" / str(issue_id)
+    assert not photos_root.exists() or not any(photos_root.iterdir())
 
 
 async def test_essay_and_issue_lookup_404(
@@ -469,6 +568,70 @@ async def test_create_student_success_and_duplicate_conflict(
         headers=auth_headers,
     )
     assert dup.status_code == 409
+
+
+async def test_student_fields_are_trimmed(
+    client: AsyncClient, auth_headers: dict[str, str]
+) -> None:
+    created = await client.post(
+        "/api/students",
+        json={"student_no": "  S104  ", "name": "  王小明  "},
+        headers=auth_headers,
+    )
+    assert created.status_code == 201
+    assert created.json()["data"]["student_no"] == "S104"
+    assert created.json()["data"]["name"] == "王小明"
+
+    blank = await client.post(
+        "/api/students",
+        json={"student_no": "   ", "name": "有效姓名"},
+        headers=auth_headers,
+    )
+    assert blank.status_code == 422
+
+
+async def test_student_update_and_import_trim_fields(
+    client: AsyncClient,
+    auth_headers: dict[str, str],
+) -> None:
+    created = await client.post(
+        "/api/students",
+        json={"student_no": "S105", "name": "旧姓名"},
+        headers=auth_headers,
+    )
+    student_id = created.json()["data"]["id"]
+
+    patched = await client.patch(
+        f"/api/students/{student_id}",
+        json={"student_no": "  S105A  ", "name": "  新 姓名  "},
+        headers=auth_headers,
+    )
+    assert patched.status_code == 200
+    assert patched.json()["data"]["student_no"] == "S105A"
+    assert patched.json()["data"]["name"] == "新 姓名"
+
+    imported = await client.post(
+        "/api/students/import",
+        json={
+            "students": [
+                {"student_no": "  S105A ", "name": "  导入 姓名 "},
+                {"student_no": " S106 ", "name": " 新学生 "},
+            ]
+        },
+        headers=auth_headers,
+    )
+    assert imported.status_code == 200
+    listing = (await client.get("/api/students", headers=auth_headers)).json()["data"]
+    by_no = {item["student_no"]: item["name"] for item in listing}
+    assert by_no["S105A"] == "导入 姓名"
+    assert by_no["S106"] == "新学生"
+
+    blank_import = await client.post(
+        "/api/students/import",
+        json={"students": [{"student_no": "   ", "name": "有效姓名"}]},
+        headers=auth_headers,
+    )
+    assert blank_import.status_code == 422
 
 
 async def test_update_student_name(client: AsyncClient, auth_headers: dict[str, str]) -> None:

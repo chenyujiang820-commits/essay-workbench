@@ -80,13 +80,23 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     payload = null;
   }
 
-  if (!response.ok || (payload !== null && payload.code !== 0)) {
+  if (!response.ok) {
     const message = payload?.message || `请求失败（HTTP ${response.status}）`;
     const code = payload?.code ?? response.status;
     throw new ApiError(message, code, response.status);
   }
 
-  return (payload as Envelope<T>).data as T;
+  if (
+    payload === null ||
+    typeof payload !== "object" ||
+    payload.code !== 0 ||
+    payload.data === null ||
+    payload.data === undefined
+  ) {
+    throw new ApiError("服务器返回了无效响应", payload?.code ?? response.status, response.status);
+  }
+
+  return payload.data;
 }
 
 /** 获取二进制资源（如原片/PDF），失败时仍尽力解析错误信封文案。 */

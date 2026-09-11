@@ -50,4 +50,27 @@ describe("api client", () => {
     const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     expect((init.headers as Headers).get("Authorization")).toBe("Bearer abc123");
   });
+
+  it("rejects a successful response without a valid envelope", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => fakeResponse(null)));
+
+    await expect(api.login("pw")).rejects.toMatchObject({
+      code: 200,
+      status: 200,
+      message: "服务器返回了无效响应",
+    });
+  });
+
+  it("rejects an envelope with missing data", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => fakeResponse({ code: 0, message: "", data: null })),
+    );
+
+    await expect(api.login("pw")).rejects.toMatchObject({
+      code: 200,
+      status: 200,
+      message: "服务器返回了无效响应",
+    });
+  });
 });

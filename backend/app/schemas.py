@@ -6,9 +6,10 @@ HTTP 状态码语义：401 未授权、404 不存在、409 未校对不可成册
 
 from __future__ import annotations
 
+from datetime import date
 from typing import Any, Generic, Literal, TypeVar, cast
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.models import Essay, Issue, Photo, RecognitionTask
 from app.pipeline.diff import DiffService, DiffType
@@ -86,6 +87,11 @@ class StudentCreate(BaseModel):
     student_no: str = Field(min_length=1, max_length=50, description="学号（唯一）")
     name: str = Field(min_length=1, max_length=100, description="姓名")
 
+    @field_validator("student_no", "name", mode="before")
+    @classmethod
+    def trim_text(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
+
 
 class StudentUpdate(BaseModel):
     """更新学生请求（字段可选）。"""
@@ -93,12 +99,22 @@ class StudentUpdate(BaseModel):
     student_no: str | None = Field(default=None, min_length=1, max_length=50)
     name: str | None = Field(default=None, min_length=1, max_length=100)
 
+    @field_validator("student_no", "name", mode="before")
+    @classmethod
+    def trim_text(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
+
 
 class StudentImportItem(BaseModel):
     """批量导入的单条学生。"""
 
     student_no: str = Field(min_length=1, max_length=50)
     name: str = Field(min_length=1, max_length=100)
+
+    @field_validator("student_no", "name", mode="before")
+    @classmethod
+    def trim_text(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
 
 
 class StudentImportRequest(BaseModel):
@@ -116,12 +132,36 @@ class IssueCreate(BaseModel):
     issue_no: int = Field(ge=1, description="期号")
     week_start_date: str = Field(min_length=1, description="周一日期（ISO 8601）")
 
+    @field_validator("week_start_date")
+    @classmethod
+    def validate_date(cls, value: str) -> str:
+        if len(value) != 10 or value[4] != "-" or value[7] != "-":
+            raise ValueError("日期必须为 YYYY-MM-DD 格式")
+        try:
+            date.fromisoformat(value)
+        except ValueError as exc:
+            raise ValueError("日期不是有效的日历日期") from exc
+        return value
+
 
 class IssueUpdate(BaseModel):
     """更新期数请求（字段可选）。"""
 
     issue_no: int | None = Field(default=None, ge=1)
     week_start_date: str | None = None
+
+    @field_validator("week_start_date")
+    @classmethod
+    def validate_date(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if len(value) != 10 or value[4] != "-" or value[7] != "-":
+            raise ValueError("日期必须为 YYYY-MM-DD 格式")
+        try:
+            date.fromisoformat(value)
+        except ValueError as exc:
+            raise ValueError("日期不是有效的日历日期") from exc
+        return value
 
 
 class IssueOut(BaseModel):

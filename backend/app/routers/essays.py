@@ -8,7 +8,9 @@
 
 from __future__ import annotations
 
+import shutil
 import uuid
+from contextlib import suppress
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
@@ -82,6 +84,16 @@ async def upload_essay(
     if not valid_files:
         raise ApiError("请至少上传一张照片", code=400, status_code=400)
 
+    prepared_files: list[tuple[bytes, str, tuple[int, int] | None]] = []
+    for seq, upload in enumerate(valid_files, start=1):
+        content = await upload.read()
+        if not content:
+            raise ApiError(f"第 {seq} 张照片内容为空", code=400, status_code=400)
+        ensure_size(len(content))
+        extension = resolve_extension(upload.filename, upload.content_type)
+        dimensions = image_size(content)
+        prepared_files.append((content, extension, dimensions))
+
     essay = Essay(
         issue_id=issue_id,
         student_id=student_id,
@@ -94,41 +106,46 @@ async def upload_essay(
     session.add(essay)
     await session.flush()  # 取得 essay.id
 
-    target_dir = settings.photos_dir / str(issue_id) / str(essay.id)
-    target_dir.mkdir(parents=True, exist_ok=True)
-
-    for seq, upload in enumerate(valid_files, start=1):
-        content = await upload.read()
-        if not content:
-            raise ApiError(f"第 {seq} 张照片内容为空", code=400, status_code=400)
-        ensure_size(len(content))
-        extension = resolve_extension(upload.filename, upload.content_type)
-        dimensions = image_size(content)
-        filename = f"{uuid.uuid4().hex}{extension}"
-        (target_dir / filename).write_bytes(content)
-        session.add(
-            Photo(
-                essay_id=essay.id,
-                seq=seq,
-                file_path=f"photos/{issue_id}/{essay.id}/{filename}",
-                width=dimensions[0] if dimensions else None,
-                height=dimensions[1] if dimensions else None,
-                engine1_text=None,
-                engine2_text=None,
-                diff_json=None,
-                created_at=utcnow_iso(),
+    issue_dir = settings.photos_dir / str(issue_id)
+    issue_dir_existed = issue_dir.exists()
+    target_dir = issue_dir / str(essay.id)
+    written = False
+    try:
+        target_dir.mkdir(parents=True, exist_ok=True)
+        for seq, (content, extension, dimensions) in enumerate(prepared_files, start=1):
+            filename = f"{uuid.uuid4().hex}{extension}"
+            (target_dir / filename).write_bytes(content)
+            written = True
+            session.add(
+                Photo(
+                    essay_id=essay.id,
+                    seq=seq,
+                    file_path=f"photos/{issue_id}/{essay.id}/{filename}",
+                    width=dimensions[0] if dimensions else None,
+                    height=dimensions[1] if dimensions else None,
+                    engine1_text=None,
+                    engine2_text=None,
+                    diff_json=None,
+                    created_at=utcnow_iso(),
+                )
             )
+        task = RecognitionTask(
+            essay_id=essay.id,
+            step="queued",
+            retry_count=0,
+            error=None,
+            updated_at=utcnow_iso(),
         )
-
-    task = RecognitionTask(
-        essay_id=essay.id,
-        step="queued",
-        retry_count=0,
-        error=None,
-        updated_at=utcnow_iso(),
-    )
-    session.add(task)
-    await session.commit()
+        session.add(task)
+        await session.commit()
+    except Exception:
+        await session.rollback()
+        if written or target_dir.exists():
+            shutil.rmtree(target_dir, ignore_errors=True)
+        if not issue_dir_existed and issue_dir.exists():
+            with suppress(OSError):
+                issue_dir.rmdir()
+        raise
     await session.refresh(essay)
     await session.refresh(task)
 
