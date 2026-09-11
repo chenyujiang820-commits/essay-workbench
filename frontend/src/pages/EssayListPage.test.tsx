@@ -74,4 +74,29 @@ describe("EssayListPage", () => {
     expect(screen.getByText(/每 3 秒自动刷新/)).toBeTruthy();
     expect(screen.getByRole("button", { name: "立即刷新" })).toBeTruthy();
   });
+
+  it("renders many students as a compact grid, not a tall single column", async () => {
+    // 模拟 45 名学生全部已定稿
+    const many: EssaySummary[] = Array.from({ length: 45 }, (_, i) => ({
+      id: i + 1,
+      issue_id: 1,
+      student_id: 100 + i,
+      student_name: `学生${String(i + 1).padStart(2, "0")}`,
+      title: "",
+      status: "proofread" as const,
+      low_confidence: 0,
+      created_at: "2026-09-07T00:00:00+00:00",
+      proofread_at: null,
+    }));
+    vi.mocked(api.listIssueEssays).mockResolvedValue(many);
+
+    const { container } = renderBoard();
+    await screen.findByText("学生45");
+
+    // 「已定稿」分组内的列表必须是多列网格（sm:grid-cols-3），不是竖排 flex-col
+    const grids = Array.from(container.querySelectorAll("ul.grid"));
+    const target = grids.find((ul) => ul.textContent?.includes("学生45"));
+    expect(target).toBeTruthy();
+    expect(target!.className).toContain("sm:grid-cols-3");
+  });
 });

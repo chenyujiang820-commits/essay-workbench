@@ -21,6 +21,7 @@ export default function IssuePage() {
   const [weekStart, setWeekStart] = useState(mondayIso());
   const [creating, setCreating] = useState(false);
   const [notice, setNotice] = useState("");
+  const [deleting, setDeleting] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -65,6 +66,29 @@ export default function IssuePage() {
     navigate(`/issues/${issue.id}/essays`);
   }
 
+  /** 删除期数：弹框二次确认；有作文时文案明示将删除的作文数。 */
+  async function handleDelete(issue: Issue): Promise<void> {
+    const message =
+      issue.essay_count > 0
+        ? `确定删除第 ${issue.issue_no} 期吗？该期共有 ${issue.essay_count} 篇作文，删除后不可恢复。`
+        : `确定删除第 ${issue.issue_no} 期吗？删除后不可恢复。`;
+    if (!window.confirm(message)) {
+      return;
+    }
+    setDeleting(true);
+    setError("");
+    setNotice("");
+    try {
+      await api.deleteIssue(issue.id, true);
+      setNotice(`第 ${issue.issue_no} 期已删除。`);
+      await load();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "删除失败，请重试");
+    } finally {
+      setDeleting(false);
+    }
+  }
+
   function handleLogout(): void {
     logout();
     navigate("/login", { replace: true });
@@ -74,13 +98,22 @@ export default function IssuePage() {
     <main className="mx-auto max-w-3xl px-4 py-6 sm:px-6 sm:py-10">
       <header className="flex items-center justify-between">
         <h1 className="text-xl font-semibold text-slate-900 sm:text-2xl">班级作文工作台</h1>
-        <button
-          type="button"
-          onClick={handleLogout}
-          className="rounded-md border border-slate-300 px-3 py-1.5 text-sm text-slate-600"
-        >
-          退出登录
-        </button>
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={() => navigate("/students")}
+            className="rounded-md border border-slate-300 px-3 py-1.5 text-sm text-slate-600"
+          >
+            学生名单
+          </button>
+          <button
+            type="button"
+            onClick={handleLogout}
+            className="rounded-md border border-slate-300 px-3 py-1.5 text-sm text-slate-600"
+          >
+            退出登录
+          </button>
+        </div>
       </header>
 
       <form
@@ -168,6 +201,14 @@ export default function IssuePage() {
                     className="rounded-md bg-slate-900 px-3 py-1.5 text-sm text-white"
                   >
                     进入看板
+                  </button>
+                  <button
+                    type="button"
+                    disabled={deleting}
+                    onClick={() => void handleDelete(issue)}
+                    className="rounded-md border border-rose-200 px-3 py-1.5 text-sm text-rose-600 disabled:opacity-60"
+                  >
+                    删除
                   </button>
                 </div>
               </li>

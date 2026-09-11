@@ -280,11 +280,13 @@ async def test_issue_update_conflict_returns_409(
     assert ok.json()["data"]["issue_no"] == 13
 
 
-async def test_delete_issue_with_essays_returns_409(
+async def test_delete_issue_with_essays_requires_confirm_then_cascades(
     client: AsyncClient,
     auth_headers: dict[str, str],
     session_factory: async_sessionmaker[AsyncSession],
+    data_dir: Path,
 ) -> None:
+    """删除有作文的期数：未带 confirm 409 拒绝；confirm=true 级联删除并清理照片目录。"""
     student_id = await create_student(session_factory, student_no="S009", name="王五")
     issue_id = (
         await client.post(
@@ -293,15 +295,27 @@ async def test_delete_issue_with_essays_returns_409(
             headers=auth_headers,
         )
     ).json()["data"]["id"]
-    await client.post(
+    upload = await client.post(
         f"/api/issues/{issue_id}/essays",
         data={"student_id": str(student_id)},
         files=[("files", ("a.jpg", b"data", "image/jpeg"))],
         headers=auth_headers,
     )
+    essay_id = upload.json()["data"]["essay_id"]
 
+    # 未确认：409 拒绝，数据保留
     blocked = await client.delete(f"/api/issues/{issue_id}", headers=auth_headers)
     assert blocked.status_code == 409
+    assert (await client.get(f"/api/essays/{essay_id}", headers=auth_headers)).status_code == 200
+
+    # 带确认：级联删除作文，原片目录一并清理
+    ok = await client.delete(
+        f"/api/issues/{issue_id}", params={"confirm": "true"}, headers=auth_headers
+    )
+    assert ok.status_code == 200
+    assert (await client.get(f"/api/essays/{essay_id}", headers=auth_headers)).status_code == 404
+    assert (await client.get(f"/api/issues/{issue_id}", headers=auth_headers)).status_code == 404
+    assert not (data_dir / "photos" / str(issue_id)).exists()
 
 
 async def test_upload_empty_file_returns_400(
@@ -390,3 +404,118 @@ async def test_students_excludes_inactive(
 
     response = await client.get("/api/students", headers=auth_headers)
     assert response.json()["data"] == []
+
+
+# ---------------------------------------------------------------------------
+# 学生管理（新增 / 改名 / 停用 / 批量导入）
+# ---------------------------------------------------------------------------
+async def test_create_student_success_and_duplicate_conflict(
+    client: AsyncClient,
+    auth_headers: dict[str, str],
+) -> None:
+    ok = await client.post(
+        "/api/students",
+        json={"student_no": "S101", "name": "王小明"},
+        headers=auth_headers,
+    )
+    assert ok.status_code == 201
+    body = ok.json()
+    assert body["data"]["student_no"] == "S101"
+    assert body["data"]["name"] == "王小明"
+    assert body["data"]["active"] == 1
+
+    dup = await client.post(
+        "/api/students",
+        json={"student_no": "S101", "name": "重复学号"},
+        headers=auth_headers,
+    )
+    assert dup.status_code == 409
+
+
+async def test_update_student_name(client: AsyncClient, auth_headers: dict[str, str]) -> None:
+    created = (
+        await client.post(
+            "/api/students",
+            json={"student_no": "S102", "name": "旧名"},
+            headers=auth_headers,
+        )
+    ).json()["data"]["id"]
+
+    patched = await client.patch(
+        f"/api/students/{created}", json={"name": "新名"}, headers=auth_headers
+    )
+    assert patched.status_code == 200
+    assert patched.json()["data"]["name"] == "新名"
+    assert patched.json()["data"]["student_no"] == "S102"
+
+
+async def test_deactivate_student_hides_from_list(
+    client: AsyncClient,
+    auth_headers: dict[str, str],
+) -> None:
+    created = (
+        await client.post(
+            "/api/students",
+            json={"student_no": "S103", "name": "转学生"},
+            headers=auth_headers,
+        )
+    ).json()["data"]["id"]
+
+    removed = await client.delete(f"/api/students/{created}", headers=auth_headers)
+    assert removed.status_code == 200
+
+    # 名单中不再出现（active=0，非物理删除，保留历史作文关联）
+    listing = await client.get("/api/students", headers=auth_headers)
+    nos = [item["student_no"] for item in listing.json()["data"]]
+    assert "S103" not in nos
+
+
+async def test_import_students_batch(
+    client: AsyncClient,
+    auth_headers: dict[str, str],
+) -> None:
+    """批量导入：新增+更新混合，重复学号视为改名更新。"""
+    result = await client.post(
+        "/api/students/import",
+        json={"students": [
+            {"student_no": "S201", "name": "李雷"},
+            {"student_no": "S202", "name": "韩梅梅"},
+        ]},
+        headers=auth_headers,
+    )
+    assert result.status_code == 200
+    body = result.json()["data"]
+    assert body["created"] == 2
+    assert body["updated"] == 0
+
+    # 再次导入：S201 改名（updated），新增 S203
+    again = await client.post(
+        "/api/students/import",
+        json={"students": [
+            {"student_no": "S201", "name": "李雷雷"},
+            {"student_no": "S203", "name": "林涛"},
+        ]},
+        headers=auth_headers,
+    )
+    body2 = again.json()["data"]
+    assert body2["created"] == 1
+    assert body2["updated"] == 1
+
+    listing = (await client.get("/api/students", headers=auth_headers)).json()["data"]
+    by_no = {item["student_no"]: item["name"] for item in listing}
+    assert by_no["S201"] == "李雷雷"
+    assert by_no["S202"] == "韩梅梅"
+    assert by_no["S203"] == "林涛"
+
+
+async def test_student_write_requires_auth(client: AsyncClient) -> None:
+    assert (
+        await client.post("/api/students", json={"student_no": "S1", "name": "x"})
+    ).status_code == 401
+    assert (
+        await client.patch("/api/students/1", json={"name": "x"})
+    ).status_code == 401
+    assert (await client.delete("/api/students/1")).status_code == 401
+    assert (
+        await client.post("/api/students/import", json={"students": []})
+    ).status_code == 401

@@ -80,6 +80,33 @@ class StudentOut(BaseModel):
     active: int = 1
 
 
+class StudentCreate(BaseModel):
+    """新增学生请求。"""
+
+    student_no: str = Field(min_length=1, max_length=50, description="学号（唯一）")
+    name: str = Field(min_length=1, max_length=100, description="姓名")
+
+
+class StudentUpdate(BaseModel):
+    """更新学生请求（字段可选）。"""
+
+    student_no: str | None = Field(default=None, min_length=1, max_length=50)
+    name: str | None = Field(default=None, min_length=1, max_length=100)
+
+
+class StudentImportItem(BaseModel):
+    """批量导入的单条学生。"""
+
+    student_no: str = Field(min_length=1, max_length=50)
+    name: str = Field(min_length=1, max_length=100)
+
+
+class StudentImportRequest(BaseModel):
+    """批量导入请求。"""
+
+    students: list[StudentImportItem] = Field(min_length=1, max_length=500)
+
+
 # ---------------------------------------------------------------------------
 # 期数
 # ---------------------------------------------------------------------------

@@ -1,0 +1,100 @@
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { RouterProvider, createMemoryRouter } from "react-router-dom";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+import { api } from "../api/client";
+import type { Issue } from "../api/types";
+import IssuePage from "./IssuePage";
+
+vi.mock("../api/client", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../api/client")>();
+  return {
+    ...actual,
+    api: {
+      ...actual.api,
+      listIssues: vi.fn(),
+      createIssue: vi.fn(),
+      deleteIssue: vi.fn(),
+    },
+  };
+});
+
+function issueOf(id: number, no: number, count: number): Issue {
+  return {
+    id,
+    issue_no: no,
+    week_start_date: "2026-09-07",
+    created_at: "2026-09-07T00:00:00+00:00",
+    essay_count: count,
+  };
+}
+
+function renderIssuePage() {
+  const router = createMemoryRouter(
+    [
+      { path: "/", element: <IssuePage /> },
+      { path: "/issues/:issueId/essays", element: <div>看板页</div> },
+      { path: "/issues/:issueId/upload", element: <div>上传页</div> },
+    ],
+    { initialEntries: ["/"] },
+  );
+  return render(<RouterProvider router={router} />);
+}
+
+describe("IssuePage 删除期数", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(api.listIssues).mockResolvedValue([
+      issueOf(1, 1, 2),
+      issueOf(2, 2, 0),
+    ]);
+  });
+
+  it("requires a second confirmation dialog before deleting", async () => {
+    renderIssuePage();
+    await screen.findByText("第 1 期");
+
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+    fireEvent.click(screen.getAllByRole("button", { name: "删除" })[0]);
+
+    // 有作文的期：确认文案必须明示将删除作文数
+    expect(confirmSpy).toHaveBeenCalledTimes(1);
+    expect(confirmSpy.mock.calls[0][0]).toContain("2 篇作文");
+
+    // 取消 → 未发起删除请求，期数仍在
+    expect(api.deleteIssue).not.toHaveBeenCalled();
+    expect(screen.getByText("第 1 期")).toBeTruthy();
+
+    // 再点删除并确认 → 调用 deleteIssue(1, true)
+    confirmSpy.mockReturnValue(true);
+    fireEvent.click(screen.getAllByRole("button", { name: "删除" })[0]);
+    await waitFor(() => expect(api.deleteIssue).toHaveBeenCalledWith(1, true));
+    confirmSpy.mockRestore();
+  });
+
+  it("confirms without essay count wording for an empty issue and deletes it", async () => {
+    renderIssuePage();
+    await screen.findByText("第 2 期");
+
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    // 第 2 期（0 篇）是第二个删除按钮
+    fireEvent.click(screen.getAllByRole("button", { name: "删除" })[1]);
+    await waitFor(() => expect(api.deleteIssue).toHaveBeenCalledWith(2, true));
+    // 空期不提示作文数
+    expect(confirmSpy.mock.calls[0][0]).not.toContain("篇作文");
+    confirmSpy.mockRestore();
+  });
+
+  it("shows an error message when deletion fails", async () => {
+    vi.mocked(api.deleteIssue).mockRejectedValue(
+      new (await import("../api/client")).ApiError("删除失败，请重试", 500, 500),
+    );
+    renderIssuePage();
+    await screen.findByText("第 1 期");
+
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    fireEvent.click(screen.getAllByRole("button", { name: "删除" })[0]);
+    await waitFor(() => expect(screen.getByText("删除失败，请重试")).toBeTruthy());
+    confirmSpy.mockRestore();
+  });
+});

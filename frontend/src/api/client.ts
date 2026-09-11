@@ -158,9 +158,46 @@ export const api = {
     return request<Issue>(`/issues/${issueId}`);
   },
 
+  deleteIssue(issueId: number, confirm: boolean): Promise<{ id: number; deleted_essays: number }> {
+    return request<{ id: number; deleted_essays: number }>(
+      `/issues/${issueId}${confirm ? "?confirm=true" : ""}`,
+      { method: "DELETE" },
+    );
+  },
+
   // -- 学生 ----------------------------------------------------------------
   listStudents(): Promise<Student[]> {
     return request<Student[]>("/students");
+  },
+
+  createStudent(studentNo: string, name: string): Promise<Student> {
+    return request<Student>("/students", {
+      method: "POST",
+      body: JSON.stringify({ student_no: studentNo, name }),
+    });
+  },
+
+  updateStudent(
+    studentId: number,
+    patch: { student_no?: string; name?: string },
+  ): Promise<Student> {
+    return request<Student>(`/students/${studentId}`, {
+      method: "PATCH",
+      body: JSON.stringify(patch),
+    });
+  },
+
+  deactivateStudent(studentId: number): Promise<{ id: number }> {
+    return request<{ id: number }>(`/students/${studentId}`, { method: "DELETE" });
+  },
+
+  importStudents(
+    students: { student_no: string; name: string }[],
+  ): Promise<{ created: number; updated: number }> {
+    return request<{ created: number; updated: number }>("/students/import", {
+      method: "POST",
+      body: JSON.stringify({ students }),
+    });
   },
 
   // -- 作文 ----------------------------------------------------------------

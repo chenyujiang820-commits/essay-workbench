@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import shutil
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request, Response
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import require_auth
+from app.config import AppSettings
 from app.db import get_session
 from app.models import Essay, Issue, utcnow_iso
 from app.schemas import (
@@ -109,22 +111,47 @@ async def update_issue(
 
 
 @router.delete("/{issue_id}", response_model=Envelope[dict[str, Any]])
-async def delete_issue(issue_id: int, session: SessionDep, _auth: AuthDep) -> dict[str, Any]:
-    """删除期数（一期无作文时才允许，保护审计数据）。
+async def delete_issue(
+    issue_id: int,
+    request: Request,
+    response: Response,
+    session: SessionDep,
+    _auth: AuthDep,
+    confirm: bool = False,
+) -> dict[str, Any]:
+    """删除期数。
+
+    * 期内无作文：直接删除。
+    * 期内有作文：必须显式 ``confirm=true``（前端二次确认后传入），
+      级联删除该期全部作文（含照片记录 / 识别任务），并清理原片目录。
 
     Raises:
-        ApiError: 404 不存在；409 该期已有作文。
+        ApiError: 404 不存在；409 有作文但未携带 confirm。
     """
+    settings: AppSettings = request.app.state.settings
+
     issue = await session.get(Issue, issue_id)
     if issue is None:
         raise ApiError("期数不存在", code=404, status_code=404)
 
-    count = (
-        await session.execute(select(func.count(Essay.id)).where(Essay.issue_id == issue_id))
-    ).scalar_one()
-    if count:
-        raise ApiError("该期已存在作文，禁止删除", code=409, status_code=409)
+    essay_ids = (
+        await session.execute(select(Essay.id).where(Essay.issue_id == issue_id))
+    ).scalars().all()
 
-    await session.delete(issue)
+    if essay_ids and not confirm:
+        raise ApiError(
+            f"该期已有 {len(essay_ids)} 篇作文，删除将一并清除；请二次确认后重试",
+            code=409,
+            status_code=409,
+        )
+
+    await session.delete(issue)  # 级联删除 essays -> photos / tasks（ORM delete-orphan）
     await session.commit()
-    return envelope({"id": issue_id}, message="期数已删除")
+
+    # 原片目录按 issue 粒度整体清理（DB 提交成功后再删盘，失败仅残留空目录）。
+    if essay_ids:
+        photos_root = settings.photos_dir / str(issue_id)
+        if photos_root.exists():
+            shutil.rmtree(photos_root, ignore_errors=True)
+
+    return envelope({"id": issue_id, "deleted_essays": len(essay_ids)}, message="期数已删除")

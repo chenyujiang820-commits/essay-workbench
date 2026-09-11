@@ -166,16 +166,16 @@ export default function EssayListPage() {
               {group.essays.length === 0 ? (
                 <p className="mt-2 text-xs text-slate-400">暂无</p>
               ) : (
-                <ul className="mt-3 flex flex-col gap-2">
+                <ul className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
                   {group.essays.map((essay) => (
                     <li key={essay.id}>
                       <button
                         type="button"
                         onClick={() => navigate(`/essays/${essay.id}/proofread`)}
-                        className="w-full rounded-lg border border-slate-200 px-3 py-2 text-left hover:border-slate-400"
+                        className="w-full rounded-lg border border-slate-200 px-2.5 py-2 text-left hover:border-slate-400"
                       >
                         <span className="flex items-center justify-between gap-2">
-                          <span className="text-sm font-medium text-slate-900">
+                          <span className="truncate text-sm font-medium text-slate-900">
                             {essay.student_name ?? `#${essay.student_id}`}
                           </span>
                           <StatusBadge status={essay.status} />

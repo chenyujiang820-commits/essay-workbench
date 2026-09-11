@@ -7,6 +7,7 @@ import IssuePage from "./pages/IssuePage";
 import LoginPage from "./pages/LoginPage";
 import PresentPage from "./pages/PresentPage";
 import ProofreadPage from "./pages/ProofreadPage";
+import StudentsPage from "./pages/StudentsPage";
 import UploadPage from "./pages/UploadPage";
 
 /** 路由表（一期）：登录页公开，其余需登录。 */
@@ -16,6 +17,7 @@ export default function App() {
       <Route path="/login" element={<LoginPage />} />
       <Route element={<RequireAuth />}>
         <Route path="/" element={<IssuePage />} />
+        <Route path="/students" element={<StudentsPage />} />
         <Route path="/issues/:issueId/upload" element={<UploadPage />} />
         <Route path="/issues/:issueId/essays" element={<EssayListPage />} />
         <Route path="/essays/:essayId/proofread" element={<ProofreadPage />} />
