@@ -84,4 +84,19 @@ describe("DiffText rendering", () => {
     fireEvent.change(textarea, { target: { value: "新文" } });
     expect(onChange).toHaveBeenCalledWith("新文");
   });
+
+  it("places the final-text editor above the diff reference section", () => {
+    const photos = [photo(1, [{ type: "replace", text_a: "校园", text_b: "学校" }])];
+    const { container } = render(
+      <DiffText photos={photos} value="校园" onChange={() => undefined} />,
+    );
+
+    const editor = container.querySelector('[data-testid="final-text"]');
+    const diff = container.querySelector('[data-testid="diff-annotated"]');
+    expect(editor).toBeTruthy();
+    expect(diff).toBeTruthy();
+    // diff 区必须位于定稿编辑区之后（DOM 前序关系断言，与样式无关）。
+    const position = diff!.compareDocumentPosition(editor!);
+    expect(position & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy();
+  });
 });

@@ -100,63 +100,72 @@ export default function DiffText({
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-3">
-      <section
-        data-testid="diff-annotated"
-        className="min-h-0 flex-1 overflow-auto rounded-lg border border-slate-200 bg-white p-4 leading-8"
-      >
-        {hasDiff ? (
-          photos.map((photo) => (
-            <div key={photo.id} className="mb-4 last:mb-0">
-              <p className="mb-1 text-xs font-medium text-slate-400">第 {photo.seq} 张</p>
-              <p className="whitespace-pre-wrap text-base text-slate-900">
-                {(photo.diff_json ?? []).map((segment, index) => {
-                  const view = describeSegment(segment, index);
-                  if (!view.suspect) {
-                    return <span key={view.index}>{view.text}</span>;
-                  }
-                  return (
-                    <span
-                      key={view.index}
-                      data-suspect={view.type}
-                      data-photo-seq={photo.seq}
-                      title={view.title}
-                      role="button"
-                      tabIndex={0}
-                      className={`${view.variant === "suspect-b" ? "diff-suspect-b" : "diff-suspect"} cursor-pointer`}
-                      onClick={() => onSelectPhoto?.(photo.seq)}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter" || event.key === " ") {
-                          event.preventDefault();
-                          onSelectPhoto?.(photo.seq);
-                        }
-                      }}
-                    >
-                      {view.text || "◻"}
-                    </span>
-                  );
-                })}
-              </p>
-            </div>
-          ))
-        ) : (
-          <p className="text-sm text-slate-500">
-            暂无 diff 数据（本篇识别置信度较高、复核引擎未介入，或复核未返回文本），
-            请直接对照左侧原片核对并在下方编辑。
-          </p>
-        )}
-      </section>
-
-      <label className="flex flex-col gap-1 text-sm font-medium text-slate-700">
+      <label className="flex min-h-0 flex-[3] flex-col gap-1 text-sm font-medium text-slate-700">
         定稿文字
         <textarea
           data-testid="final-text"
-          className="min-h-[160px] w-full resize-y rounded-lg border border-slate-300 p-3 text-base leading-7 outline-none focus:border-slate-500 disabled:bg-slate-50"
+          className="min-h-[160px] w-full flex-1 resize-none rounded-lg border border-slate-300 p-3 text-base leading-7 outline-none focus:border-slate-500 disabled:bg-slate-50"
           value={value}
           disabled={disabled}
           placeholder="在此核对并编辑定稿文字"
           onChange={(event) => onChange(event.target.value)}
         />
       </label>
+
+      <details
+        data-testid="diff-details"
+        className="flex min-h-0 flex-[2] flex-col rounded-lg border border-slate-200 bg-slate-50"
+        open
+      >
+        <summary className="shrink-0 cursor-pointer select-none px-4 py-2 text-sm font-medium text-slate-600">
+          识别对照（存疑高亮）
+        </summary>
+        <section
+          data-testid="diff-annotated"
+          className="min-h-0 flex-1 overflow-auto border-t border-slate-200 bg-white p-4 leading-8"
+        >
+          {hasDiff ? (
+            photos.map((photo) => (
+              <div key={photo.id} className="mb-4 last:mb-0">
+                <p className="mb-1 text-xs font-medium text-slate-400">第 {photo.seq} 张</p>
+                <p className="whitespace-pre-wrap text-base text-slate-900">
+                  {(photo.diff_json ?? []).map((segment, index) => {
+                    const view = describeSegment(segment, index);
+                    if (!view.suspect) {
+                      return <span key={view.index}>{view.text}</span>;
+                    }
+                    return (
+                      <span
+                        key={view.index}
+                        data-suspect={view.type}
+                        data-photo-seq={photo.seq}
+                        title={view.title}
+                        role="button"
+                        tabIndex={0}
+                        className={`${view.variant === "suspect-b" ? "diff-suspect-b" : "diff-suspect"} cursor-pointer`}
+                        onClick={() => onSelectPhoto?.(photo.seq)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter" || event.key === " ") {
+                            event.preventDefault();
+                            onSelectPhoto?.(photo.seq);
+                          }
+                        }}
+                      >
+                        {view.text || "◻"}
+                      </span>
+                    );
+                  })}
+                </p>
+              </div>
+            ))
+          ) : (
+            <p className="text-sm text-slate-500">
+              暂无 diff 数据（本篇识别置信度较高、复核引擎未介入，或复核未返回文本），
+              请直接对照左侧原片核对并在上方编辑。
+            </p>
+          )}
+        </section>
+      </details>
     </div>
   );
 }

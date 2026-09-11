@@ -240,7 +240,7 @@ export default function ProofreadPage() {
       ) : null}
 
       <p className="mt-3 rounded-md bg-slate-100 px-4 py-2 text-xs text-slate-500">
-        左侧为原片（可缩放），右侧黄色为引擎存疑处；点击存疑处可定位对应原片。核对后编辑定稿文字，点击「保存并定稿」。
+        左侧为原片（可缩放），右侧上方编辑定稿文字，下方「识别对照」黄色为引擎存疑处；点击存疑处可定位对应原片。核对后点击「保存并定稿」。
       </p>
 
       {error ? (
