@@ -27,6 +27,20 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 DEFAULT_DATA_DIR = "./data"
 DEFAULT_LOW_CONFIDENCE_THRESHOLD = 0.85
 
+#: 篇级并发 Worker 数（engines.yaml ``worker_concurrency``）。
+DEFAULT_WORKER_CONCURRENCY = 4
+MIN_WORKER_CONCURRENCY = 1
+MAX_WORKER_CONCURRENCY = 8
+
+#: 单张低画质置信度扣分（engines.yaml ``low_resolution_penalty``）及其合法区间。
+DEFAULT_LOW_RESOLUTION_PENALTY = 0.05
+MIN_LOW_RESOLUTION_PENALTY = 0.0
+MAX_LOW_RESOLUTION_PENALTY = 0.2
+
+#: 班级名兜底值。**与 ``app/render/templates.py`` 的同名常量刻意重复**：config 不能
+#: 反向依赖 render（render 依赖 config），班级名单一来源由集成阶段收敛（见交付报告）。
+DEFAULT_CLASS_NAME = "班级"
+
 
 class AppSettings(BaseSettings):
     """运行时配置（仅来自环境变量）。
@@ -109,6 +123,37 @@ class AppSettings(BaseSettings):
         except (TypeError, ValueError):
             return DEFAULT_LOW_CONFIDENCE_THRESHOLD
 
+    # -- v1.2 运行参数（非法/越界一律钳制，避免配置写错就起不来）-------------
+    def worker_concurrency(self) -> int:
+        """篇级并发 Worker 数，钳制到 1~8（默认 4）。"""
+        return _clamp_int(
+            self.engines_config().get("worker_concurrency"),
+            DEFAULT_WORKER_CONCURRENCY,
+            MIN_WORKER_CONCURRENCY,
+            MAX_WORKER_CONCURRENCY,
+        )
+
+    def low_resolution_penalty(self) -> float:
+        """单张低画质的置信度扣分，钳制到 0~0.2（默认 0.05）。"""
+        return _clamp_float(
+            self.engines_config().get("low_resolution_penalty"),
+            DEFAULT_LOW_RESOLUTION_PENALTY,
+            MIN_LOW_RESOLUTION_PENALTY,
+            MAX_LOW_RESOLUTION_PENALTY,
+        )
+
+    @property
+    def class_name(self) -> str:
+        """班级名（``app.yaml`` 顶层 ``class_name``），供 ``GET /api/meta`` 展示。
+
+        本属性是班级名的唯一实现：app.render.templates.class_name_from_settings
+        已改为转发到这里（依赖方向只有 render -> config，不成环），改兜底文案只需改这一处。
+        """
+        raw = self.app_config().get("class_name")
+        if isinstance(raw, str) and raw.strip():
+            return raw.strip()
+        return DEFAULT_CLASS_NAME
+
     def _repo_config_dir(self) -> Path:
         """代码库内的配置示例目录（backend/config）。"""
         return Path(__file__).resolve().parents[1] / "config"
@@ -140,6 +185,26 @@ class AppSettings(BaseSettings):
             example = self._repo_config_dir() / "engines.yaml.example"
             if example.exists():
                 self.engines_path.write_text(example.read_text(encoding="utf-8"), encoding="utf-8")
+
+
+def _clamp_int(raw: object, default: int, low: int, high: int) -> int:
+    """把配置值归一化为 ``[low, high]`` 内的整数；非法值回退默认。"""
+    try:
+        value = int(str(raw))
+    except (TypeError, ValueError):
+        value = default
+    return max(low, min(high, value))
+
+
+def _clamp_float(raw: object, default: float, low: float, high: float) -> float:
+    """把配置值归一化为 ``[low, high]`` 内的浮点数；非法值回退默认。"""
+    try:
+        value = float(str(raw))
+    except (TypeError, ValueError):
+        value = default
+    if value != value:  # NaN 比较恒 False，这里显式回退，避免污染扣分计算
+        return default
+    return max(low, min(high, value))
 
 
 @lru_cache(maxsize=1)

@@ -1,0 +1,26 @@
+# ---------------------------------------------------------------------------
+# 班级作文工作台 · 备份定时器
+#
+# 装法见 deploy/backup.service 头部注释。常用检查命令：
+#   systemctl list-timers ewb-backup.timer     # 下一次触发时间
+#   systemctl start ewb-backup.service         # 手动立刻跑一次（不等定时器）
+#
+# 节奏选择理由：PRD v1.2 §9.2 要求"每周快照 + 异地备份"，一期数据只本机存一份，
+# 所以按**每天**备（凌晨低峰），保留策略再由 backup.py 裁成 日7/周4/月6。
+# Persistent=true 是关键：机器关机/停机错过的窗口，开机后立刻补跑一次，
+# 否则"每周快照"会因为某次周末没开机而直接漏掉。
+# ---------------------------------------------------------------------------
+[Unit]
+Description=每天凌晨备份班级作文工作台数据
+Requires=ewb-backup.service
+
+[Timer]
+Unit=ewb-backup.service
+# 03:10 本地时间；RandomizedDelaySec 打散多台机器同时备份的尖峰。
+OnCalendar=*-*-* 03:10:00
+RandomizedDelaySec=600
+Persistent=true
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

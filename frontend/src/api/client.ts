@@ -11,6 +11,7 @@ import type {
   EssaySummary,
   Issue,
   LoginResult,
+  MetaInfo,
   PresentData,
   Student,
   TemplateInfo,
@@ -65,6 +66,20 @@ function authHeaders(init?: HeadersInit): Headers {
   return headers;
 }
 
+/**
+ * 把任意来源的 code 归一为**非零**错误码。
+ *
+ * 信封契约里 ``code === 0`` 唯一表示"成功"，因此绝不允许出现在 ApiError 上；
+ * 否则调用方无法区分成功与失败。依次回退：信封 code → HTTP 状态码 → 500。
+ */
+function normalizeErrorCode(raw: unknown, status: number): number {
+  const candidate = typeof raw === "number" && Number.isFinite(raw) ? Math.trunc(raw) : 0;
+  if (candidate !== 0) {
+    return candidate;
+  }
+  return status > 0 ? status : 500;
+}
+
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = authHeaders(init.headers);
   if (init.body && !(init.body instanceof FormData)) {
@@ -82,8 +97,11 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 
   if (!response.ok) {
     const message = payload?.message || `请求失败（HTTP ${response.status}）`;
-    const code = payload?.code ?? response.status;
-    throw new ApiError(message, code, response.status);
+    throw new ApiError(
+      message,
+      normalizeErrorCode(payload?.code, response.status),
+      response.status,
+    );
   }
 
   if (
@@ -93,7 +111,11 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     payload.data === null ||
     payload.data === undefined
   ) {
-    throw new ApiError("服务器返回了无效响应", payload?.code ?? response.status, response.status);
+    throw new ApiError(
+      "服务器返回了无效响应",
+      normalizeErrorCode(payload?.code, response.status),
+      response.status,
+    );
   }
 
   return payload.data;
@@ -113,7 +135,7 @@ async function requestBlob(path: string, init: RequestInit = {}): Promise<Blob> 
       const payload = (await response.json()) as Envelope<unknown>;
       if (payload?.message) {
         message = payload.message;
-        code = payload.code ?? code;
+        code = normalizeErrorCode(payload.code, code);
       }
     } catch {
       /* 非 JSON 响应，沿用默认文案 */
@@ -134,7 +156,7 @@ async function requestText(path: string, init: RequestInit = {}): Promise<string
       const payload = (await response.json()) as Envelope<unknown>;
       if (payload?.message) {
         message = payload.message;
-        code = payload.code ?? code;
+        code = normalizeErrorCode(payload.code, code);
       }
     } catch {
       /* 忽略 */
@@ -166,6 +188,17 @@ export const api = {
 
   getIssue(issueId: number): Promise<Issue> {
     return request<Issue>(`/issues/${issueId}`);
+  },
+
+  /** 改期号 / 周起始日（v1.2 补前端入口）。 */
+  updateIssue(
+    issueId: number,
+    patch: { issue_no?: number; week_start_date?: string },
+  ): Promise<Issue> {
+    return request<Issue>(`/issues/${issueId}`, {
+      method: "PATCH",
+      body: JSON.stringify(patch),
+    });
   },
 
   deleteIssue(issueId: number, confirm: boolean): Promise<{ id: number; deleted_essays: number }> {
@@ -221,12 +254,17 @@ export const api = {
 
   updateEssay(
     essayId: number,
-    payload: { final_text: string; proofread: boolean },
+    payload: { final_text: string; proofread: boolean; title?: string },
   ): Promise<EssayDetail> {
     return request<EssayDetail>(`/essays/${essayId}`, {
       method: "PATCH",
       body: JSON.stringify(payload),
     });
+  },
+
+  /** 重新排队识别（v1.2 FR-10）：已定稿会被后端 409 拒绝。 */
+  retryEssay(essayId: number): Promise<UploadResult> {
+    return request<UploadResult>(`/essays/${essayId}/recognize`, { method: "POST" });
   },
 
   /** 多图一次提交一篇作文（multipart：student_id + files[]）。 */
@@ -240,6 +278,12 @@ export const api = {
       method: "POST",
       body: form,
     });
+  },
+
+  // -- 元信息 --------------------------------------------------------------
+  /** 班级名与版本（免鉴权）。 */
+  fetchMeta(): Promise<MetaInfo> {
+    return request<MetaInfo>("/meta");
   },
 
   // -- 原片 ----------------------------------------------------------------

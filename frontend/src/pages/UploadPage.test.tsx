@@ -5,9 +5,16 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../api/client";
 import UploadPage from "./UploadPage";
 
-vi.mock("../lib/image", () => ({
-  compressImages: vi.fn(async (files: File[]) => files),
-}));
+vi.mock("../lib/image", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../lib/image")>();
+  return {
+    ...actual,
+    // 默认：压缩产物即入参、尺寸未知（不触发画质提醒）
+    processImages: vi.fn(
+      async (files: File[]) => files.map((file) => ({ file, width: 0, height: 0 })),
+    ),
+  };
+});
 
 vi.mock("../api/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../api/client")>();
@@ -62,8 +69,8 @@ describe("UploadPage", () => {
   });
 
   it("shows an error when image compression fails instead of failing silently", async () => {
-    const { compressImages } = await import("../lib/image");
-    vi.mocked(compressImages).mockRejectedValueOnce(new Error("decode failed"));
+    const { processImages } = await import("../lib/image");
+    vi.mocked(processImages).mockRejectedValueOnce(new Error("decode failed"));
     renderUpload();
 
     fireEvent.change(await screen.findByTestId("photo-input"), {
@@ -134,5 +141,46 @@ describe("UploadPage", () => {
 
     await waitFor(() => expect(screen.getByText("请先选择学生")).toBeTruthy());
     expect(api.uploadEssay).not.toHaveBeenCalled();
+  });
+
+  it("renders the capture guide with all four shooting tips", async () => {
+    renderUpload();
+    const guide = await screen.findByTestId("capture-guide");
+    expect(guide.textContent).toMatch(/光线/);
+    expect(guide.textContent).toMatch(/垂直/);
+    expect(guide.textContent).toMatch(/铺满/);
+    expect(guide.textContent).toMatch(/600/);
+    expect(guide.textContent).toMatch(/800/);
+  });
+
+  it("flags a low-resolution pick with a badge, keeps it deletable and still submittable", async () => {
+    const small = new File([new Uint8Array([1])], "IMG_small.jpg", { type: "image/jpeg" });
+    const { processImages } = await import("../lib/image");
+    // 原图 500x400：短边 400 < 600 → 画质偏低
+    vi.mocked(processImages).mockResolvedValue([
+      { file: small, width: 500, height: 400 },
+    ]);
+
+    renderUpload();
+    await screen.findByTestId("photo-input");
+
+    const input = screen.getByTestId("photo-input") as HTMLInputElement;
+    fireEvent.change(input, { target: { files: [small] } });
+
+    const badge = await screen.findByTestId("low-res-badge");
+    expect(badge.textContent).toBe("画质偏低");
+    expect(screen.getByText(/画质偏低，识别准确率会下降/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "删除第 1 张" }));
+    await waitFor(() => expect(screen.queryByTestId("low-res-badge")).toBeNull());
+
+    fireEvent.change(input, { target: { files: [small] } });
+    await screen.findByTestId("low-res-badge");
+
+    fireEvent.change(screen.getByLabelText("学生"), { target: { value: "7" } });
+    fireEvent.click(screen.getByRole("button", { name: "上传并识别" }));
+    await waitFor(() => expect(api.uploadEssay).toHaveBeenCalledTimes(1));
+    // 提醒不阻断：低画质照片照常提交
+    expect((api.uploadEssay as ReturnType<typeof vi.fn>).mock.calls[0][2]).toHaveLength(1);
   });
 });

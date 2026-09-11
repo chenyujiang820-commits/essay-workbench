@@ -10,6 +10,7 @@ import { ApiError, api } from "../api/client";
 import type { EssayDetail, EssaySummary, Issue } from "../api/types";
 import { isRecognizing } from "../api/types";
 import StatusBadge from "../components/StatusBadge";
+import { useClassName } from "../lib/classMeta";
 import { groupEssays, studentCounts } from "../lib/board";
 import { useAppStore } from "../store";
 
@@ -27,6 +28,8 @@ export default function EssayListPage() {
   const [essays, setEssays] = useState<EssaySummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [retryingId, setRetryingId] = useState<number | null>(null);
+  const [notice, setNotice] = useState("");
 
   const applyDetail = useCallback((detail: EssayDetail) => {
     setEssays((previous) =>
@@ -76,17 +79,42 @@ export default function EssayListPage() {
     }
   }, [essays, startPolling, stopPolling, applyDetail]);
 
+  /** AC-6 / FR-10：失败稿在看板上直接重跑，不必先点进校对页找入口。 */
+  async function handleRetry(essay: EssaySummary): Promise<void> {
+    setRetryingId(essay.id);
+    setError("");
+    setNotice("");
+    try {
+      const result = await api.retryEssay(essay.id);
+      const status = result.status || "recognizing";
+      setEssays((previous) =>
+        previous.map((item) => (item.id === essay.id ? { ...item, status } : item)),
+      );
+      setNotice((essay.student_name ?? "#" + String(essay.student_id)) + " 已重新排队识别");
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "重新识别失败，请稍后再试");
+    } finally {
+      setRetryingId(null);
+    }
+  }
+
   // 卸载即停全部轮询。
   useEffect(() => () => stopAllPolling(), [stopAllPolling]);
 
   const groups = groupEssays(essays);
   const counts = studentCounts(essays);
+  const className = useClassName();
+  // 画质偏低的篇目：原片不达标会直接放大「编字」风险，看板层面就要看得见。
+  const lowResEssays = essays.filter((essay) => (essay.low_resolution_count ?? 0) > 0);
 
   return (
     <main className="mx-auto max-w-4xl px-4 py-6 sm:px-6 sm:py-8">
       <header className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-xl font-semibold text-slate-900">
           状态看板{issue ? ` · 第 ${issue.issue_no} 期` : ""}
+          {className ? (
+            <span className="ml-2 text-sm font-normal text-slate-500">{className}</span>
+          ) : null}
         </h1>
         <div className="flex flex-wrap gap-2">
           <button
@@ -132,11 +160,25 @@ export default function EssayListPage() {
         <p className="mt-4 rounded-md bg-rose-50 px-4 py-3 text-sm text-rose-600">{error}</p>
       ) : null}
 
+      {notice ? (
+        <p
+          data-testid="board-retry-notice"
+          className="mt-4 rounded-md bg-emerald-50 px-4 py-3 text-sm text-emerald-700"
+        >
+          {notice}
+        </p>
+      ) : null}
+
       <section className="mt-5 rounded-xl border border-slate-200 bg-white p-4 text-sm text-slate-600 shadow-sm">
         <p>
           共 <span className="font-semibold text-slate-900">{essays.length}</span> 篇 ·
           <span className="font-semibold text-slate-900"> {counts.length}</span> 名学生
           <span className="ml-2 text-xs text-slate-400">识别中作文每 3 秒自动刷新</span>
+        {lowResEssays.length > 0 ? (
+          <span data-testid="board-low-res-summary" className="ml-2 text-xs text-amber-600">
+            {lowResEssays.length} 篇原片画质偏低
+          </span>
+        ) : null}
         </p>
         {counts.length > 0 ? (
           <ul className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-500">
@@ -168,7 +210,7 @@ export default function EssayListPage() {
               ) : (
                 <ul className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
                   {group.essays.map((essay) => (
-                    <li key={essay.id}>
+                    <li key={essay.id} className="flex flex-col gap-1">
                       <button
                         type="button"
                         onClick={() => navigate(`/essays/${essay.id}/proofread`)}
@@ -183,7 +225,27 @@ export default function EssayListPage() {
                         {essay.low_confidence === 1 ? (
                           <span className="mt-1 block text-xs text-amber-600">整篇置信度偏低</span>
                         ) : null}
+                        {(essay.low_resolution_count ?? 0) > 0 ? (
+                          <span
+                            data-testid="essay-low-res"
+                            title="有原片短边不足 600 或长边不足 800 像素，建议重拍"
+                            className="mt-1 block text-xs text-amber-600"
+                          >
+                            画质偏低 {essay.low_resolution_count} 张
+                          </span>
+                        ) : null}
                       </button>
+                      {essay.status === "failed" ? (
+                        <button
+                          type="button"
+                          data-testid={"board-retry-" + String(essay.id)}
+                          disabled={retryingId !== null}
+                          onClick={() => void handleRetry(essay)}
+                          className="w-full rounded-md bg-rose-700 px-2 py-1 text-xs font-medium text-white disabled:opacity-60"
+                        >
+                          {retryingId === essay.id ? "排队中…" : "重新识别"}
+                        </button>
+                      ) : null}
                     </li>
                   ))}
                 </ul>

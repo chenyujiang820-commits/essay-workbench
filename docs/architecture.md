@@ -214,3 +214,99 @@ CREATE TABLE recognition_tasks (
 | 3 | 评分排序 | 预留禁用（score 字段已留），一期仅学号/姓名排序 |
 | 4 | API Key 归属 | 老板自备，仅存数据目录 engines.yaml（gitignore），代码库只放 engines.yaml.example |
 | 5 | 置信度阈值 | 默认 0.85，engines.yaml 可调，无需拍板 |
+
+---
+
+## Part C: v1.2 增量（2026-09-12 · 一期合规加固）
+
+> Part A/B 是一期（v1.0/v1.1）的原始设计，作为历史记录**不回溯改写**。本节只登记
+> PRD v1.2 带来的结构性变化，避免读者拿旧图当现状。
+
+### C.1 识别吞吐：单消费者 → 有界篇级并发（FR-10）
+
+| 项 | v1.0 原设计 | v1.2 现状 |
+|---|---|---|
+| 并发形态 | 单个 `run_loop` 串行消费队列 | `asyncio.Semaphore` 守着的 **N 个篇级任务**，N = `worker_concurrency` |
+| 配置来源 | 无 | `engines.yaml` `worker_concurrency`，钳制 1~8，默认 4，非法回退 4 |
+| 篇内顺序 | 逐张按 `seq` 串行 | **不变**——并发只发生在篇与篇之间，单篇正文顺序不受影响 |
+| 回滚 | — | 填 `1` 即回到单消费者行为 |
+
+关键不变量（有测试守着）：每篇一个**独立 DB session**，任一篇失败只把该篇置 `failed`，
+不中断兄弟篇；`task.step` 不跨篇串写。
+
+实测收益曲线（45 篇 / 112 张 / 224 次引擎调用，mock，同量冷跑）：
+
+| 并发度 | 墙钟 | 加速 |
+|---|---|---|
+| 1 | 7.71 s | 1.00× |
+| 2 | 4.31 s | 1.79× |
+| 4 | 3.79 s | 2.03× |
+| 8 | 3.92 s | 1.97× |
+
+**结论：4 就是平台期，别靠加并发度追吞吐。** 每篇的多次 commit 要在 SQLite 单写锁上排队，
+瓶颈已从网络等待转移到写锁。AC-7 的门禁因此改成「结构化判据（在飞峰值）为主 + 墙钟 ≤60% 为辅」，
+真实吞吐由 AC-10 真机计时负责。
+
+### C.2 新增模块与端点
+
+- `app/pipeline/title.py`：`extract_title(raw)` —— 从定稿/识别正文首行抽标题，去空白与常见标题符号、
+  限长 30 字；空结果由调用方兜底（校对页手填 → 成册/投屏/文件名显示「未命名」）。
+  **写库只在该字段原本为空时**，老师手改过的标题永不被覆盖。
+  判「是正文不是标题」的三条（rev.3 按真机照片重写，取向是宁缺勿错）：句末标点落在**行主体内部**
+  （OCR 断行的正文残句标点不在行尾）、清洗后 >30 字、整行是作文本表头/表单栏目（栏目词 ≥2 且实义字 ≤1）。
+  注意是**位置**而不是个数：数个数会漏掉只有 1 个句中问号的残句，实测真机 5 张里错了 2 张。
+- `PATCH /api/essays/{id}`：`title` 用 `exclude_unset` 区分「不传」与「传空串」，
+  不传即不清空（GAP-05）。
+- `POST /api/essays/{id}/recognize`：`failed` 重跑回 `recognizing`；`proofread` 返 409；
+  非失败态返 400；不存在返 404（GAP-06 / AC-6）。
+- `GET /api/meta`：`class_name` + `version`，前端顶栏与各页副标题的单一来源。
+- `GET /api/health`：增补版本等运行元信息（FR-13 运维基线）。
+- `deploy/backup.py`：SQLite Online Backup API + `config/` + `photos/` 一致性归档，
+  日 7/周 4/月 6 保留裁剪，`--verify` 跑 `integrity_check` 并比对文件数（GAP-07 / AC-8）。
+  配 `deploy/backup.service` + `backup.timer` 定时。
+- `app/auth.py`：登录失败限速（同源 5 次 → 指数退避，上限 15 分钟，OPT-03 / AC-9）。
+
+### C.3 画质门槛成为识别质量的输入（FR-10）
+
+`images.is_low_resolution(width, height)`：长边 ≥800 且短边 ≥600 为合格。**画质是派生值，
+不入表**：`photos` 只存 `width`/`height`，`PhotoOut.low_resolution` 与看板计数在序列化时
+现算（尺寸不可解析记 0，不猜测），这样旧库无需迁移列即可升级。置信度评分对每张低画质原片按
+`low_resolution_penalty`（钳制 0~0.2，默认 0.05）扣分，**整篇累计封顶 0.15**
+（`confidence.MAX_LOW_RESOLUTION_PENALTY`）。前端 `lib/image.ts` 用同一口径出角标，
+判定不阻断上传（提醒而非拦截）。
+
+### C.4 版本与班级名的单一来源
+
+- 版本号唯一出处：`app.__init__.__version__`；`/api/health`、`/api/meta`、FastAPI
+  OpenAPI 元数据都读它。
+- 班级名唯一来源：`app.yaml` 顶层 `class_name`，`config.class_name` 与
+  `render.templates.class_name_from_settings` 同读该键、同回退「班级」。
+
+### C.5 验证链与已知边界
+
+- `verify.sh` 六段（ruff→mypy→pytest cov≥80→tsc→eslint→vitest）是**合入门禁**。
+- `frontend/src/test-setup.ts` 有一段 jsdom/undici `AbortSignal` 兼容垫片：jsdom 的
+  `AbortSignal` 不是 undici `Request` 认可的实例，构造 `new Request(_, {signal})` 会抛。
+  垫片用「真的构造一次 Request」探测是否需要打补丁——比对构造函数会得出假阳性。
+- **仍未达成**：PRD v1.2 §8.1 的二/三期启动门禁（真班级跑通 ≥2 整周、老师计时 <2h、
+  真实识别可用率 ≥85%）属线下人工项，代码无法自证。
+
+### C.6 二次审计补齐（2026-09-12 晚 · AC-6 与 OPT-01）
+
+第一轮把 AC-6 只做成了「后端四分支 + 校对页入口」，把 OPT-01 只做成了「面板默认展开」。
+两者在 PRD 里的原文都更多，本轮补齐：
+
+- **看板级重跑**（`pages/EssayListPage.tsx`）：`failed` 篇目的卡片下方直接给「重新识别」，
+  受理后把该篇状态就地改成返回值（`recognizing`），于是它自动迁到「识别中」分组并被
+  既有 3s 轮询接管——不新增第二套轮询。行容器由 `<button>` 改为 `<li>` 内两个同层兄弟，
+  避免出现 button 嵌 button 的非法 DOM。
+- **句级对照**（`components/DiffText.tsx`）：`splitSentences()` 按中文句末标点断句，
+  标点及右引号归前句；一个存疑段落展开成多个可点单元。存疑 key 为
+  `seq:index[:part]`，**单句不带后缀**，因此既有断言与「存疑 N 处」计数口径不变。
+  展示层切分，`diff_json` 数据模型不动（PRD 原话「不改变数据模型」）。
+- 三处口径共用 `listSuspectKeys()`：面板计数、已查看集合、定稿前「还有 N 处未点看」提醒，
+  不会出现「面板说 2 处、提醒说 1 处」。
+
+另关掉一个静默归零陷阱：`ConfidenceScorer._to_sample()` 原来用
+`getattr(photo, "low_resolution", False)`，而表里根本没有这一列（见 C.3）——直接把 ORM
+对象传进来时画质扣分会悄悄变 0 且测试全绿。现改为「有显式标记用标记，否则由宽高现算」。

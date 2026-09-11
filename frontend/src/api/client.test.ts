@@ -73,4 +73,25 @@ describe("api client", () => {
       message: "服务器返回了无效响应",
     });
   });
+
+  it("never surfaces a zero error code when the server sends code 0 with a failure status", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => fakeResponse({ code: 0, data: null, message: "后端异常" }, 500)),
+    );
+
+    const error = await api.login("pw").catch((err: unknown) => err);
+    expect(error).toBeInstanceOf(ApiError);
+    expect((error as ApiError).code).not.toBe(0);
+    expect((error as ApiError).code).toBe(500);
+    expect((error as ApiError).message).toBe("后端异常");
+  });
+
+  it("falls back to HTTP status when the failure envelope omits code", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => fakeResponse({ data: null }, 404)));
+
+    const error = await api.getEssay(1).catch((err: unknown) => err);
+    expect(error).toBeInstanceOf(ApiError);
+    expect((error as ApiError).code).toBe(404);
+  });
 });

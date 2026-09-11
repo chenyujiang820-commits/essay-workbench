@@ -10,6 +10,7 @@ import { ApiError, api } from "../api/client";
 import type { EssaySummary, ExportOrder, Issue, TemplateInfo } from "../api/types";
 import PreviewFrame from "../components/PreviewFrame";
 import TemplatePicker from "../components/TemplatePicker";
+import { useClassName } from "../lib/classMeta";
 import { bookFileName, singleFileName, triggerDownload } from "../lib/download";
 import { formatDate } from "../lib/date";
 
@@ -31,6 +32,7 @@ export default function BookPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const className = useClassName();
 
   const pendingCount = essays.filter((essay) => essay.status !== "proofread").length;
   const canExport = essays.length > 0 && pendingCount === 0;
@@ -123,6 +125,9 @@ export default function BookPage() {
       <header className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-xl font-semibold text-slate-900">
           成册与导出{issue ? ` · 第 ${issue.issue_no} 期` : ""}
+          {className ? (
+            <span className="ml-2 text-sm font-normal text-slate-500">{className}</span>
+          ) : null}
         </h1>
         <div className="flex gap-2">
           <button

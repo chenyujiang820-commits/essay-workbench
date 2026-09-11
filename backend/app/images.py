@@ -108,3 +108,31 @@ def image_size(content: bytes) -> tuple[int, int] | None:
         return int(width), int(height)
     except (UnidentifiedImageError, OSError, ValueError):
         return None
+
+# ---------------------------------------------------------------------------
+# 画质门槛（FR-10）
+# ---------------------------------------------------------------------------
+#: 短边下限（像素）：低于此值手写字迹难以辨认。
+MIN_SHORT_EDGE = 600
+
+#: 长边下限（像素）：配合短边共同构成 800x600 口径。
+MIN_LONG_EDGE = 800
+
+
+def is_low_resolution(width: int | None, height: int | None) -> bool:
+    """判断原片是否低于画质门槛（``min(w,h) < 600`` 或 ``max(w,h) < 800``）。
+
+    与前端上传页的"画质偏低"角标共用同一口径（PRD v1.2 AC-3），避免两端判定漂移。
+
+    Args:
+        width: 像素宽；``None`` 表示 Pillow 未能解析。
+        height: 像素高；``None`` 表示未能解析。
+
+    Returns:
+        低于门槛返回 ``True``；尺寸未知返回 ``False``（宁可不提示，不误伤可上传的照片）。
+    """
+    if width is None or height is None:
+        return False
+    if width <= 0 or height <= 0:
+        return False
+    return min(width, height) < MIN_SHORT_EDGE or max(width, height) < MIN_LONG_EDGE

@@ -44,6 +44,8 @@ function essay(id: number, status: string, name: string, title: string): EssaySu
     title,
     status,
     low_confidence: 0,
+    photo_count: 1,
+    low_resolution_count: 0,
     created_at: "2026-09-07T00:00:00+00:00",
     proofread_at: null,
   };

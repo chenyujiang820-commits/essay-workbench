@@ -3,16 +3,44 @@
  * 并以 JPEG {@link JPEG_QUALITY} 质量重编码，显著降低手机原片体积与上传耗时。
  *
  * 非图片文件（或无法解码的图片）直接原样返回，保证流水线不被压缩环节阻断。
+ *
+ * 画质门槛（isLowResolution）口径与后端 app/images.py 完全一致：短边 <600 或
+ * 长边 <800 视为偏低。手写识别依赖笔画细节，PRD v1.1 FR-01 引用了「800×600 以上」
+ * 的接口要求，因此选图当场就要提示重拍，而不是等识别结果出来才发现错字连篇。
  */
 
 export const MAX_EDGE = 2000;
 export const JPEG_QUALITY = 0.85;
+
+/** 手写识别可接受的短边下限（px）。 */
+export const MIN_SHORT_EDGE = 600;
+/** 手写识别可接受的长边下限（px）。 */
+export const MIN_LONG_EDGE = 800;
 
 export interface CompressOptions {
   /** 最长边上限（px）。 */
   maxEdge?: number;
   /** JPEG 编码质量（0~1）。 */
   quality?: number;
+}
+
+/**
+ * 画质是否低于手写识别门槛。
+ *
+ * 与后端 is_low_resolution 同源：短边 < MIN_SHORT_EDGE 或长边 < MIN_LONG_EDGE。
+ * 尺寸未知（无法解码 / 非图片 / 后端未落库）时返回 false——宁可漏提示，也不要把
+ * 正常照片判成不合格而挡住老师上传。
+ */
+export function isLowResolution(
+  width: number | null | undefined,
+  height: number | null | undefined,
+): boolean {
+  if (!width || !height) {
+    return false;
+  }
+  const shortEdge = Math.min(width, height);
+  const longEdge = Math.max(width, height);
+  return shortEdge < MIN_SHORT_EDGE || longEdge < MIN_LONG_EDGE;
 }
 
 /** 目标画布尺寸：等比缩放，且仅缩小不放大。 */
@@ -76,42 +104,86 @@ function canvasToBlob(canvas: HTMLCanvasElement, quality: number): Promise<Blob 
  * @param options 压缩参数（默认最长边 2000px、质量 0.85）。
  * @returns 压缩后的 JPEG `File`，或原文件。
  */
-export async function compressImage(file: File, options: CompressOptions = {}): Promise<File> {
+/** 压缩结果 + 原图尺寸（供画质判定复用同一次解码，避免二次解码开销）。 */
+export interface ProcessedImage {
+  file: File;
+  /** 原图像素宽；无法解析时为 0。 */
+  width: number;
+  /** 原图像素高；无法解析时为 0。 */
+  height: number;
+}
+
+/**
+ * 压缩单张图片并回报原图尺寸；非图片或压缩失败时返回原文件。
+ *
+ * @param file 待压缩文件。
+ * @param options 压缩参数（默认最长边 2000px、质量 0.85）。
+ * @returns 压缩后的文件与原图像素尺寸。
+ */
+export async function processImage(
+  file: File,
+  options: CompressOptions = {},
+): Promise<ProcessedImage> {
   const maxEdge = options.maxEdge ?? MAX_EDGE;
   const quality = options.quality ?? JPEG_QUALITY;
 
   if (!file.type.startsWith("image/")) {
-    return file; // 非图片直接短路
+    return { file, width: 0, height: 0 }; // 非图片直接短路
   }
 
   let decoded: Awaited<ReturnType<typeof loadImage>> | null = null;
   try {
     decoded = await loadImage(file);
-    const { width, height } = targetSize(decoded.width, decoded.height, maxEdge);
+    const sourceWidth = decoded.width;
+    const sourceHeight = decoded.height;
+    const { width, height } = targetSize(sourceWidth, sourceHeight, maxEdge);
 
     const canvas = document.createElement("canvas");
     canvas.width = width;
     canvas.height = height;
     const context = canvas.getContext("2d");
     if (!context) {
-      return file; // 无 2D 上下文（极端环境）则降级原图
+      return { file, width: sourceWidth, height: sourceHeight }; // 无 2D 上下文则降级原图
     }
     context.drawImage(decoded.source, 0, 0, width, height);
 
     const blob = await canvasToBlob(canvas, quality);
     if (!blob) {
-      return file;
+      return { file, width: sourceWidth, height: sourceHeight };
     }
     const name = toJpegName(file.name || "photo.jpg");
-    return new File([blob], name, { type: "image/jpeg", lastModified: file.lastModified });
+    return {
+      file: new File([blob], name, { type: "image/jpeg", lastModified: file.lastModified }),
+      width: sourceWidth,
+      height: sourceHeight,
+    };
   } catch {
-    return file; // 解码/编码失败一律降级原图，不阻断上传
+    // 解码/编码失败一律降级原图，不阻断上传；尺寸留 0，画质判定按「不提示」处理
+    return { file, width: 0, height: 0 };
   } finally {
     decoded?.revoke();
   }
 }
 
+/** 只关心压缩产物的调用方沿用此入口。 */
+export async function compressImage(file: File, options: CompressOptions = {}): Promise<File> {
+  const processed = await processImage(file, options);
+  return processed.file;
+}
+
+/** 批量处理（保序），返回压缩结果与原图尺寸。 */
+export async function processImages(
+  files: File[],
+  options: CompressOptions = {},
+): Promise<ProcessedImage[]> {
+  return Promise.all(files.map((file) => processImage(file, options)));
+}
+
 /** 批量压缩（保序）。 */
-export async function compressImages(files: File[], options: CompressOptions = {}): Promise<File[]> {
-  return Promise.all(files.map((file) => compressImage(file, options)));
+export async function compressImages(
+  files: File[],
+  options: CompressOptions = {},
+): Promise<File[]> {
+  const processed = await processImages(files, options);
+  return processed.map((item) => item.file);
 }

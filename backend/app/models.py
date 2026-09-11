@@ -2,9 +2,13 @@
 
 设计要点（严格对齐 docs/architecture.md 第 3 节）：
 * 所有时间字段以 ISO 8601 UTC 字符串存储，展示层再转本地时区。
-* ``photos.engine1_text`` / ``engine2_text`` / ``diff_json`` 为**不可变审计数据**，
-  落库后只读；老师编辑只会写入 ``essays.final_text``。
-* 二/三期预留字段（``teacher_comment`` / ``score`` / ``selected``）一期不写入。
+* ``photos.engine1_text`` / ``engine2_text`` / ``diff_json`` 为**审计数据**：
+  识别落库后只读（老师编辑只写 ``essays.final_text``）；``POST /api/essays/{id}/recognize``
+  重跑会整体重写这三列（旧文本随重跑丢弃，不做增量合并）。
+* ``essays.title`` 一期生效：识别 Worker 抽取正文首行自动写入（仅当老师未填），
+  老师在 ``PATCH /api/essays/{id}`` 传 ``title`` 时以其为准（人工优先）。
+* 二/三期预留字段（``teacher_comment`` / ``score`` / ``selected``）一期无写入入口，
+  仅成册/投屏按当前值渲染徽标与评语位（为空即不出现）。
 """
 
 from datetime import UTC, datetime
@@ -101,7 +105,11 @@ class Essay(Base):
 
 
 class Photo(Base):
-    """一张原片及其双引擎识别结果（审计数据，落库只读）。"""
+    """一张原片及其双引擎识别结果。
+
+    ``engine1_text`` / ``engine2_text`` / ``diff_json`` **识别落库后只读**，
+    重跑（``POST /api/essays/{id}/recognize``）会整体重写这三列。
+    """
 
     __tablename__ = "photos"
     __table_args__ = (UniqueConstraint("essay_id", "seq", name="uq_photo_essay_seq"),)

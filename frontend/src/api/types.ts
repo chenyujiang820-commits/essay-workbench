@@ -33,6 +33,8 @@ export interface Photo {
   file_path: string;
   width: number | null;
   height: number | null;
+  /** 画质低于手写识别门槛（短边 <600 或长边 <800）：1 表示偏低。 */
+  low_resolution: number;
   engine1_text: string | null;
   engine2_text: string | null;
   diff_json: DiffSegment[] | null;
@@ -65,6 +67,10 @@ export interface EssaySummary {
   title: string;
   status: string;
   low_confidence: number;
+  /** 原片张数（看板一次性展示画质用，免逐篇点开）。 */
+  photo_count: number;
+  /** 画质偏低的原片张数。 */
+  low_resolution_count: number;
   created_at: string;
   proofread_at: string | null;
 }
@@ -76,6 +82,12 @@ export interface EssayDetail extends EssaySummary {
   selected: number;
   photos: Photo[];
   task: RecognitionTaskInfo | null;
+}
+
+/** 应用元信息（免鉴权）。 */
+export interface MetaInfo {
+  class_name: string;
+  version: string;
 }
 
 export interface UploadResult {

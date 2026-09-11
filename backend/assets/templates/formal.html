@@ -37,6 +37,16 @@
         border-bottom: 1px solid #d1d5db;
       }
       .toc li .n { color: #6b7280; }
+      .toc .meta { margin: -3mm 0 6mm; text-align: center; font-size: 10.5pt; color: #6b7280; }
+      .flag {
+        display: inline-block;
+        margin-left: 2mm;
+        padding: 0.2mm 2mm;
+        border: 0.5pt solid #9ca3af;
+        color: #374151;
+        font-size: 8.5pt;
+        vertical-align: middle;
+      }
       .essay { page-break-before: always; }
       .essay h2.title {
         font-size: 19pt;
@@ -58,17 +68,30 @@
         font-size: 9pt;
         vertical-align: middle;
       }
+      /* 评语位：仅当 item.comment 非空时渲染，否则不产生任何 DOM */
+      .essay .comment {
+        margin-top: 6mm;
+        padding-top: 2mm;
+        border-top: 0.5pt solid #9ca3af;
+        font-size: 10pt;
+        line-height: 1.7;
+        color: #374151;
+        white-space: pre-wrap;
+      }
       .single { page-break-before: avoid; }
     </style>
   </head>
   <body>
     {% if mode == 'single' %}
     <article class="essay single">
-      <h2 class="title">{{ item.title or '无题' }}{% if item.is_selected %}<span class="badge">精 选</span>{% endif %}</h2>
+      <h2 class="title">{{ item.title or '未命名' }}{% if item.is_selected %}<span class="badge">精 选</span>{% endif %}</h2>
       <div class="author">{{ item.name }}{% if item.student_no %} · {{ item.student_no }}{% endif %}</div>
       <div class="body">
         {% for p in item.paragraphs %}<p>{{ p }}</p>{% else %}<p class="empty">（正文待补）</p>{% endfor %}
       </div>
+      {% if item.comment %}
+      <div class="comment">师评：{{ item.comment }}</div>
+      {% endif %}
       <div class="sign">{{ class_name }}　{{ generated_at }}</div>
     </article>
     {% else %}
@@ -90,11 +113,12 @@
 
     <section class="toc">
       <h2>目 录</h2>
+      <div class="meta">{{ class_name }} · 第 {{ issue_no }} 期 · 周一起 {{ week_start_date }}</div>
       <ol>
         {% for item in items %}
         <li>
-          <span>{{ item.name }}{% if item.is_selected %}<span class="badge">精 选</span>{% endif %}</span>
-          <span class="n">{{ item.title or '无题' }}</span>
+          <span>{{ item.name }}{% if item.is_selected %}<span class="badge">精 选</span>{% endif %}{% if item.comment %}<span class="flag">评语</span>{% endif %}</span>
+          <span class="n">{{ item.title or '未命名' }}</span>
         </li>
         {% endfor %}
       </ol>
@@ -102,11 +126,14 @@
 
     {% for item in items %}
     <article class="essay">
-      <h2 class="title">{{ item.title or '无题' }}{% if item.is_selected %}<span class="badge">精 选</span>{% endif %}</h2>
+      <h2 class="title">{{ item.title or '未命名' }}{% if item.is_selected %}<span class="badge">精 选</span>{% endif %}</h2>
       <div class="author">{{ item.name }}{% if item.student_no %} · {{ item.student_no }}{% endif %}</div>
       <div class="body">
         {% for p in item.paragraphs %}<p>{{ p }}</p>{% else %}<p class="empty">（正文待补）</p>{% endfor %}
       </div>
+      {% if item.comment %}
+      <div class="comment">师评：{{ item.comment }}</div>
+      {% endif %}
       <div class="sign">—— {{ item.name }}　{{ generated_at }}</div>
     </article>
     {% endfor %}

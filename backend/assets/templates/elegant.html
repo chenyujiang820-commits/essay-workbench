@@ -41,6 +41,17 @@
       }
       .toc li .t { color: #334155; }
       .toc li .n { color: #94a3b8; font-size: 11pt; }
+      .toc .meta { margin: 0 0 5mm; font-size: 10.5pt; color: #94a3b8; }
+      .flag {
+        display: inline-block;
+        margin-left: 2mm;
+        padding: 0.3mm 2.2mm;
+        border-radius: 999px;
+        background: #f1f5f9;
+        color: #64748b;
+        font-size: 8.5pt;
+        vertical-align: middle;
+      }
       /* 每篇 */
       .essay { page-break-before: always; }
       .essay h2.title { font-size: 20pt; text-align: center; margin: 0 0 3mm; font-weight: 600; }
@@ -57,6 +68,26 @@
         font-size: 9pt;
         vertical-align: middle;
       }
+      /* 评语位：仅当 item.comment 非空时渲染，否则不产生任何 DOM */
+      .essay .comment {
+        margin-top: 8mm;
+        padding-top: 3mm;
+        border-top: 1px solid #e2e8f0;
+      }
+      .essay .comment-label {
+        font-size: 9.5pt;
+        letter-spacing: 0.2em;
+        color: #94a3b8;
+        margin-bottom: 1.5mm;
+      }
+      .essay .comment-text {
+        margin: 0;
+        font-family: "Songti SC", "SimSun", "Noto Serif CJK SC", "Source Han Serif SC", serif;
+        font-size: 11pt;
+        line-height: 1.8;
+        color: #475569;
+        white-space: pre-wrap;
+      }
       /* 单篇版式：铺满一页、无封面目录 */
       .single { page-break-before: avoid; }
       .single h2.title { font-size: 24pt; margin-top: 6mm; }
@@ -67,11 +98,17 @@
   <body>
     {% if mode == 'single' %}
     <article class="essay single">
-      <h2 class="title">{{ item.title or '无题' }}{% if item.is_selected %}<span class="badge">精选</span>{% endif %}</h2>
+      <h2 class="title">{{ item.title or '未命名' }}{% if item.is_selected %}<span class="badge">精选</span>{% endif %}</h2>
       <div class="author">{{ item.name }}{% if item.student_no %} · {{ item.student_no }}{% endif %}</div>
       <div class="body">
         {% for p in item.paragraphs %}<p>{{ p }}</p>{% else %}<p class="empty">（正文待补）</p>{% endfor %}
       </div>
+      {% if item.comment %}
+      <div class="comment">
+        <div class="comment-label">教师评语</div>
+        <p class="comment-text">{{ item.comment }}</p>
+      </div>
+      {% endif %}
       <div class="colophon">{{ class_name }} · 第 {{ issue_no }} 期 · {{ generated_at }}</div>
     </article>
     {% else %}
@@ -85,11 +122,12 @@
 
     <section class="toc">
       <h2>目 录</h2>
+      <div class="meta">{{ class_name }} · 第 {{ issue_no }} 期 · 周一起 {{ week_start_date }}</div>
       <ol>
         {% for item in items %}
         <li>
-          <span class="t">{{ item.name }}{% if item.is_selected %}<span class="badge">精选</span>{% endif %}</span>
-          <span class="n">{{ item.title or '无题' }}</span>
+          <span class="t">{{ item.name }}{% if item.is_selected %}<span class="badge">精选</span>{% endif %}{% if item.comment %}<span class="flag">评语</span>{% endif %}</span>
+          <span class="n">{{ item.title or '未命名' }}</span>
         </li>
         {% endfor %}
       </ol>
@@ -97,11 +135,17 @@
 
     {% for item in items %}
     <article class="essay">
-      <h2 class="title">{{ item.title or '无题' }}{% if item.is_selected %}<span class="badge">精选</span>{% endif %}</h2>
+      <h2 class="title">{{ item.title or '未命名' }}{% if item.is_selected %}<span class="badge">精选</span>{% endif %}</h2>
       <div class="author">{{ item.name }}{% if item.student_no %} · {{ item.student_no }}{% endif %}</div>
       <div class="body">
         {% for p in item.paragraphs %}<p>{{ p }}</p>{% else %}<p class="empty">（正文待补）</p>{% endfor %}
       </div>
+      {% if item.comment %}
+      <div class="comment">
+        <div class="comment-label">教师评语</div>
+        <p class="comment-text">{{ item.comment }}</p>
+      </div>
+      {% endif %}
     </article>
     {% endfor %}
     {% endif %}

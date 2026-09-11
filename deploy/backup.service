@@ -1,0 +1,55 @@
+# ---------------------------------------------------------------------------
+# 班级作文工作台 · 数据备份 systemd 单元（一次性任务，由 timer 触发）
+#
+# 与 essay-workbench.service（后端）**解耦**：备份不依赖后端进程存活，走的是
+# SQLite Online Backup API，可以在服务运行时安全执行（WAL 下直接 cp 才是不安全的）。
+#
+# 安装步骤（以 /opt/essay-workbench 部署、运行用户 essay 为例）：
+#   1. 备份归档目录先建好（**不要**放在 EWB_DATA_DIR 之内，否则 backup.py 会拒绝裁剪）：
+#        install -d -o essay -g essay -m 0750 /var/backups/essay-workbench
+#   2. 安装两个单元：
+#        cp deploy/backup.service /etc/systemd/system/ewb-backup.service
+#        cp deploy/backup.timer   /etc/systemd/system/ewb-backup.timer
+#        systemctl daemon-reload && systemctl enable --now ewb-backup.timer
+#   3. 立刻试跑一次，确认归档可校验：
+#        systemctl start ewb-backup.service
+#        journalctl -u ewb-backup.service -n 40
+#        python /opt/essay-workbench/deploy/backup.py \
+#            --verify /var/backups/essay-workbench/ewb-backup-*.tar.gz | tail -1
+#
+# 归档里含 config/engines.yaml（API Key）与 config/app.yaml（口令哈希），属敏感件：
+# backup.py 会把归档权限收到 0600，本单元再用 0750 的归档目录 + essay 用户兜住。
+# 异地复制请走加密通道（rclone crypt / restic / rsync over ssh），别挂公共网盘。
+# ---------------------------------------------------------------------------
+[Unit]
+Description=班级作文工作台数据备份（SQLite 在线快照 + config + photos）
+After=local-fs.target
+# 后端没起来也照样备份：库是只读打开，不会因为服务停了就丢数据。
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=essay
+Group=essay
+WorkingDirectory=/opt/essay-workbench
+# 数据目录：backup.py 缺省读这个环境变量，与后端指向同一份数据。
+Environment=EWB_DATA_DIR=/data/essay-workbench
+ExecStart=/opt/essay-workbench/backend/.venv/bin/python /opt/essay-workbench/deploy/backup.py \
+    --data-dir /data/essay-workbench --out /var/backups/essay-workbench
+# 备份失败别静默：nonzero 退出交给 systemd 记录，方便监控/journal 报警。
+SuccessExitStatus=0
+TimeoutStartSec=3600
+
+# 安全加固（与后端单元同口径）
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/backups/essay-workbench
+# 数据目录只读：backup.py 承诺对数据目录只读，这里用内核权限再兜一层。
+# 若 SQLite 只读打开失败需要补写 WAL 检查点，把下面一行改成 ReadWritePaths 追加
+# /data/essay-workbench 即可（代价：备份进程具备写权限）。
+# ReadWritePaths=/data/essay-workbench
+
+[Install]
+WantedBy=multi-user.target

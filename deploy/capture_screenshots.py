@@ -17,8 +17,15 @@
 
 产出（写入 ``artifacts/``）：
 * ``投屏视图-1920x1080.png``  讲评投屏（PresentPage）横版全屏
-* ``校对页-1920x1080.png``    校对环（ProofreadPage）桌面左右分栏
-* ``校对页-375x812.png``      校对环手机竖版
+* ``校对页-1920x1080.png``    校对环（ProofreadPage）桌面宽屏左右分栏
+* ``校对页-1366x768.png``     校对环笔记本分辨率（AC-2 要求的三视口之一）
+* ``校对页-375x812.png``      校对环手机竖版（响应式堆叠）
+* ``看板-1366x768.png``       状态看板（画质汇总条 + 学生卡片网格）
+* ``看板-失败重跑-1366x768.png``  把一篇临时置为 failed 后拍摄，用于证明 AC-6 的
+  「重新识别」入口；拍完立即还原状态。仅在使用 ``--serve --data-dir`` 时产出。
+
+``--no-worker``：以 ``EWB_WORKER_ENABLED=false`` 起服务。截图不需要识别，而 ``--serve``
+默认会打开 Worker 去补跑未完成任务——那会**真实调用引擎并产生费用**，截图前请务必加上。
 """
 
 from __future__ import annotations
@@ -26,6 +33,7 @@ from __future__ import annotations
 import argparse
 import os
 import socket
+import sqlite3
 import subprocess
 import sys
 import time
@@ -70,11 +78,11 @@ def _login(base_url: str, password: str) -> str:
     return str(response.json()["data"]["token"])
 
 
-def _start_server(data_dir: Path, port: int) -> tuple[subprocess.Popen[bytes], object]:
-    """以指定数据目录启动 uvicorn。"""
+def _start_server(data_dir: Path, port: int, worker: bool = True) -> tuple[subprocess.Popen[bytes], object]:
+    """以指定数据目录启动 uvicorn（``worker=False`` 时关掉识别 Worker）。"""
     env = dict(os.environ)
     env["EWB_DATA_DIR"] = str(data_dir)
-    env["EWB_WORKER_ENABLED"] = "true"
+    env["EWB_WORKER_ENABLED"] = "true" if worker else "false"
     env["PYTHONPATH"] = ""
     log_handle = (ARTIFACTS / "screenshots-server.log").open("w", encoding="utf-8")
     proc = subprocess.Popen(
@@ -93,8 +101,39 @@ def _token_init_script(token: str) -> str:
     return f"try {{ window.localStorage.setItem({TOKEN_KEY!r}, {token!r}); }} catch (e) {{}}"
 
 
+def _set_failed(db_path: Path, essay_id: int) -> None:
+    """把一篇临时置为 failed，只为截图取证；调用方负责还原。
+
+    只动传入的数据目录（截图用的是副本），不碰真实数据。
+    """
+    # 注意：essays 表没有 error 列（失败原因记在 recognition_tasks.error），看板卡片也只
+    # 渲染状态徽标 + 「重新识别」按钮，所以这里只改 status，不编造失败原因文案。
+    with sqlite3.connect(str(db_path)) as con:
+        cur = con.execute("UPDATE essays SET status = ? WHERE id = ?", ("failed", essay_id))
+        con.commit()
+        row = con.execute("SELECT status FROM essays WHERE id = ?", (essay_id,)).fetchone()
+        print(
+            f"[flip] essay {essay_id}: {cur.rowcount} row updated, status now {row[0]!r}",
+            flush=True,
+        )
+
+
+def _restore_status(db_path: Path, essay_id: int) -> None:
+    """还原截图前的状态（本副本数据固定为 proofread）。"""
+    with sqlite3.connect(str(db_path)) as con:
+        con.execute("UPDATE essays SET status = ? WHERE id = ?", ("proofread", essay_id))
+        con.commit()
+        row = con.execute("SELECT status FROM essays WHERE id = ?", (essay_id,)).fetchone()
+        print(f"[flip] restored essay {essay_id} -> {row[0]!r}", flush=True)
+
+
 def capture(
-    base_url: str, token: str, issue_id: int, essay_id: int, out_dir: Path
+    base_url: str,
+    token: str,
+    issue_id: int,
+    essay_id: int,
+    out_dir: Path,
+    db_path: Path | None = None,
 ) -> list[dict[str, object]]:
     """依次截取三张图，返回产物清单。"""
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -125,7 +164,42 @@ def capture(
         print(f"[shot] {target.name} ({target.stat().st_size} bytes)", flush=True)
         desktop.close()
 
-        # 3) 校对页：手机竖版（响应式堆叠）
+        # 3) 笔记本视口：AC-2 明写的三视口之一（375 / 1366 / 1920）
+        laptop = browser.new_context(viewport={"width": 1366, "height": 768})
+        laptop.add_init_script(_token_init_script(token))
+        page = laptop.new_page()
+        page.goto(f"{base_url}/essays/{essay_id}/proofread", wait_until="networkidle")
+        page.get_by_role("button", name="保存并定稿").wait_for(timeout=15000)
+        page.wait_for_timeout(1200)
+        target = out_dir / "校对页-1366x768.png"
+        page.screenshot(path=str(target))
+        produced.append({"filename": target.name, "bytes": target.stat().st_size})
+        print(f"[shot] {target.name} ({target.stat().st_size} bytes)", flush=True)
+
+        # 4) 状态看板：卡片按学生分组，画质汇总条与角标是这张的证据点。
+        #    标题兜底「未命名」不体现在看板上（看板不显示标题），证据在校对页/投屏/PDF。
+        page.goto(f"{base_url}/issues/{issue_id}/essays", wait_until="networkidle")
+        page.get_by_text("状态看板").wait_for(timeout=15000)
+        page.wait_for_timeout(600)
+        target = out_dir / "看板-1366x768.png"
+        page.screenshot(path=str(target))
+        produced.append({"filename": target.name, "bytes": target.stat().st_size})
+        print(f"[shot] {target.name} ({target.stat().st_size} bytes)", flush=True)
+
+        # 4b) 失败态看板：临时把一篇置为 failed，证明 AC-6 的「重新识别」入口，拍完还原。
+        if db_path is not None:
+            _set_failed(db_path, essay_id)
+            page.goto(f"{base_url}/issues/{issue_id}/essays", wait_until="networkidle")
+            page.get_by_text("状态看板").wait_for(timeout=15000)
+            page.wait_for_timeout(600)
+            target = out_dir / "看板-失败重跑-1366x768.png"
+            page.screenshot(path=str(target))
+            produced.append({"filename": target.name, "bytes": target.stat().st_size})
+            print(f"[shot] {target.name} ({target.stat().st_size} bytes)", flush=True)
+            _restore_status(db_path, essay_id)
+        laptop.close()
+
+        # 5) 校对页：手机竖版（响应式堆叠）
         mobile = browser.new_context(viewport={"width": 375, "height": 812})
         mobile.add_init_script(_token_init_script(token))
         phone = mobile.new_page()
@@ -155,6 +229,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--data-dir", help="数据目录（--serve 模式必填）")
     parser.add_argument("--password", default="admin123", help="登录口令（--serve 模式）")
     parser.add_argument("--port", type=int, default=0, help="服务端口（0=自动）")
+    parser.add_argument(
+        "--no-worker",
+        action="store_true",
+        help="--serve 时关闭识别 Worker（截图不需要识别；开着会补跑任务并真实调用引擎）",
+    )
     args = parser.parse_args(argv)
 
     proc: subprocess.Popen[bytes] | None = None
@@ -168,14 +247,23 @@ def main(argv: list[str] | None = None) -> int:
                 raise SystemExit("--serve 模式需要 --data-dir")
             port = args.port or _free_port()
             base_url = f"http://127.0.0.1:{port}"
-            proc, log_handle = _start_server(Path(args.data_dir).resolve(), port)
+            proc, log_handle = _start_server(
+                Path(args.data_dir).resolve(), port, worker=not args.no_worker
+            )
             _wait_health(base_url)
             token = _login(base_url, args.password)
 
         if not base_url or not token:
             raise SystemExit("需要 --base-url 与 --token（或使用 --serve）")
 
-        capture(base_url, token, args.issue_id, args.essay_id, Path(args.out_dir))
+        capture(
+            base_url,
+            token,
+            args.issue_id,
+            args.essay_id,
+            Path(args.out_dir),
+            db_path=Path(args.data_dir).resolve() / "essay.db" if args.serve else None,
+        )
     finally:
         if proc is not None:
             proc.terminate()

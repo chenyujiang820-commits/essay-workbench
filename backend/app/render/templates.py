@@ -7,8 +7,11 @@
 
       {
         class_name, issue_no, week_start_date, generated_at, template, order,
-        items: [ {student_no, name, title, paragraphs: [...], is_selected} ]
+        items: [ {student_no, name, title, paragraphs: [...], is_selected, comment} ]
       }
+
+  ``comment`` 取自 ``essay.teacher_comment``（v1.2 / FR-12 评语位）：一期一般为空，
+  三套模板用 ``{% if item.comment %}`` 条件渲染，空值不产生任何 DOM 与占位。
 
 * 中文字体栈覆盖 Windows 开发机与 Linux 服务器，落到系统字体即可。
 * 三/二类排序：``student_no``（默认）/ ``name``；``score`` 为二期预留，一期返回 400。
@@ -129,7 +132,7 @@ def sort_essays(essays: Sequence[Essay], order: str) -> list[Essay]:
 
 
 def build_items(essays: Sequence[Essay]) -> list[dict[str, Any]]:
-    """把 ORM 作文序列映射为统一渲染条目。"""
+    """把 ORM 作文序列映射为统一渲染条目（含评语位 ``comment``）。"""
     items: list[dict[str, Any]] = []
     for essay in essays:
         student = essay.student
@@ -140,17 +143,20 @@ def build_items(essays: Sequence[Essay]) -> list[dict[str, Any]]:
                 "title": (essay.title or "").strip(),
                 "paragraphs": split_paragraphs(essay.final_text),
                 "is_selected": bool(essay.selected),
+                "comment": (essay.teacher_comment or "").strip(),
             }
         )
     return items
 
 
 def class_name_from_settings(settings: AppSettings) -> str:
-    """读取班级名：``app.yaml`` 顶层 ``class_name``，缺省回退默认值。"""
-    raw = settings.app_config().get("class_name")
-    if isinstance(raw, str) and raw.strip():
-        return raw.strip()
-    return DEFAULT_CLASS_NAME
+    """读取班级名：唯一实现在 ``AppSettings.class_name``，这里只做转发。
+
+    曾经这里抄了一份同样的读取逻辑，注释理由是"避免 config <-> render 导入环"；
+    但本模块本来就 ``from app.config import AppSettings``，依赖是单向的，不存在环。
+    两处实现意味着"改兜底文案要记得改两个地方"，故收敛成单一来源。
+    """
+    return settings.class_name
 
 
 def build_meta(

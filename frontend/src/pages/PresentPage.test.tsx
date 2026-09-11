@@ -183,4 +183,18 @@ describe("PresentPage", () => {
     expect(screen.queryByTestId("pager-controls")).toBeNull();
     expect(screen.getByRole("button", { name: "退出纯净模式" })).toBeTruthy();
   });
+
+  it("falls back to 未命名 when the essay has no title", async () => {
+    vi.mocked(api.fetchPresent).mockResolvedValue({
+      ...presentData,
+      items: [{ ...presentData.items[0], title: "" }, presentData.items[1]],
+    });
+    renderPresent();
+
+    // 与同文件其它用例一致：并行高负载时状态更新到重渲染可能超过默认 1s。
+    const title = await screen.findByTestId("present-title", undefined, { timeout: 4000 });
+    expect(title.textContent).toBe("未命名");
+    // 旧的「无题」兜底不得再出现（FR-11 明确要求区分）。
+    expect(screen.queryByText("无题")).toBeNull();
+  });
 });

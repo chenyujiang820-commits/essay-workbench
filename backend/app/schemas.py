@@ -186,13 +186,18 @@ class DiffSegment(BaseModel):
 
 
 class PhotoOut(BaseModel):
-    """照片及其识别结果（engine 文本与 diff 为只读审计数据）。"""
+    """照片及其识别结果。
+
+    ``engine1_text`` / ``engine2_text`` / ``diff_json`` 识别落库后只读，重跑会整体重写。
+    """
 
     id: int
     seq: int
     file_path: str
     width: int | None = None
     height: int | None = None
+    #: 画质低于门槛（短边<600 或长边<800）时为 1；尺寸无法解析时为 0。
+    low_resolution: int = 0
     engine1_text: str | None = None
     engine2_text: str | None = None
     diff_json: list[DiffSegment] | None = None
@@ -212,7 +217,7 @@ class TaskOut(BaseModel):
 # 作文
 # ---------------------------------------------------------------------------
 class EssayOut(BaseModel):
-    """作文列表项。"""
+    """作文列表项（看板用，含画质汇总，免逐篇点开）。"""
 
     id: int
     issue_id: int
@@ -221,6 +226,10 @@ class EssayOut(BaseModel):
     title: str = ""
     status: str = "uploaded"
     low_confidence: int = 0
+    #: 原片张数。
+    photo_count: int = 0
+    #: 其中画质偏低（``low_resolution=1``）的张数。
+    low_resolution_count: int = 0
     created_at: str
     proofread_at: str | None = None
 
@@ -241,6 +250,13 @@ class EssayUpdate(BaseModel):
 
     final_text: str = Field(default="", description="老师定稿文字")
     proofread: bool = Field(default=False, description="是否完成校对（铁律）")
+    title: str | None = Field(default=None, max_length=200, description="作文标题；不传即不改")
+
+    @field_validator("title", mode="before")
+    @classmethod
+    def normalize_title(cls, value: object) -> object:
+        """标题去首尾空白；``null`` 表示"本次不改标题"，与"传空串清空标题"区分。"""
+        return value.strip() if isinstance(value, str) else value
 
 
 class UploadResult(BaseModel):
@@ -250,6 +266,33 @@ class UploadResult(BaseModel):
     status: str
     photo_count: int
     task: TaskOut | None = None
+
+
+class RecognizeRerunOut(BaseModel):
+    """重跑识别受理结果（202）。"""
+
+    essay_id: int
+    status: str
+    task: TaskOut | None = None
+
+
+# ---------------------------------------------------------------------------
+# 运维元信息（FR-13）
+# ---------------------------------------------------------------------------
+class MetaOut(BaseModel):
+    """``GET /api/meta``：免鉴权，仅暴露班级名与版本供前端顶栏展示。"""
+
+    class_name: str
+    version: str
+
+
+class HealthOut(BaseModel):
+    """``GET /api/health``：健康探针（systemd / 外部拨测用）。"""
+
+    status: Literal["ok", "degraded"] = "ok"
+    version: str = ""
+    db_ok: bool = True
+    pending_tasks: int | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -264,13 +307,19 @@ class TemplateInfo(BaseModel):
 
 
 class BookItemOut(BaseModel):
-    """成册/投屏共用条目。"""
+    """成册/投屏共用条目。
+
+    ``comment`` 为二/三期评语位（FR-12 预留）：**必须在这里显式声明**，否则
+    ``BookItemOut(**item)`` 会按 Pydantic 默认策略静默丢弃 ``build_items`` 透出的评语，
+    投屏 JSON 与 PDF 就再也看不到它。
+    """
 
     student_no: str = ""
     name: str = ""
     title: str = ""
     paragraphs: list[str] = Field(default_factory=list)
     is_selected: bool = False
+    comment: str = ""
 
 
 class PresentOut(BaseModel):
@@ -306,6 +355,17 @@ def task_to_out(task: RecognitionTask | None) -> TaskOut | None:
     )
 
 
+def is_low_resolution_flag(width: int | None, height: int | None) -> int:
+    """画质门槛判定（返回 0/1，与库内 int 风格一致）。
+
+    在函数内延迟导入 ``app.images``：images 依赖本模块的 ``ApiError``，模块级互相
+    导入会形成 schemas <-> images 循环。
+    """
+    from app.images import is_low_resolution
+
+    return 1 if is_low_resolution(width, height) else 0
+
+
 def photo_to_out(photo: Photo) -> PhotoOut:
     """映射照片（diff_json 反序列化为段落列表）。"""
     raw_segments = DiffService.from_json(photo.diff_json)
@@ -327,14 +387,29 @@ def photo_to_out(photo: Photo) -> PhotoOut:
         file_path=photo.file_path,
         width=photo.width,
         height=photo.height,
+        low_resolution=is_low_resolution_flag(photo.width, photo.height),
         engine1_text=photo.engine1_text,
         engine2_text=photo.engine2_text,
         diff_json=segments,
     )
 
 
+def _photo_counts(essay: Essay) -> tuple[int, int]:
+    """统计 (原片张数, 其中低画质张数)。
+
+    依赖 ``Essay.photos`` 的 ``lazy="selectin"``：列表查询已把照片随主查询载入，
+    不会在异步上下文中触发隐式懒加载。
+    """
+    photos = list(essay.photos or [])
+    low_count = sum(
+        1 for photo in photos if is_low_resolution_flag(photo.width, photo.height)
+    )
+    return len(photos), low_count
+
+
 def essay_to_out(essay: Essay) -> EssayOut:
     """映射作文列表项。"""
+    photo_count, low_resolution_count = _photo_counts(essay)
     return EssayOut(
         id=essay.id,
         issue_id=essay.issue_id,
@@ -343,6 +418,8 @@ def essay_to_out(essay: Essay) -> EssayOut:
         title=essay.title,
         status=essay.status,
         low_confidence=essay.low_confidence,
+        photo_count=photo_count,
+        low_resolution_count=low_resolution_count,
         created_at=essay.created_at,
         proofread_at=essay.proofread_at,
     )
@@ -360,6 +437,8 @@ def essay_to_detail(essay: Essay) -> EssayDetail:
         title=essay.title,
         status=essay.status,
         low_confidence=essay.low_confidence,
+        photo_count=len(photos),
+        low_resolution_count=sum(1 for photo in photos if photo.low_resolution),
         created_at=essay.created_at,
         proofread_at=essay.proofread_at,
         final_text=essay.final_text,

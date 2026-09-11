@@ -4,6 +4,7 @@
 * ``GET  /api/issues/{issue_id}/essays``  某期作文列表（状态看板用）。
 * ``GET  /api/essays/{essay_id}``         详情（含识别结果与 diff）。
 * ``PATCH /api/essays/{essay_id}``        校对保存：final_text 非空 + proofread=true 定稿。
+* ``POST /api/essays/{essay_id}/recognize`` 重跑识别（FR-10：failed/review 稿重新排队）。
 """
 
 from __future__ import annotations
@@ -29,6 +30,7 @@ from app.schemas import (
     EssayDetail,
     EssayOut,
     EssayUpdate,
+    RecognizeRerunOut,
     UploadResult,
     envelope,
     essay_to_detail,
@@ -217,6 +219,9 @@ async def update_essay(
         raise ApiError("定稿文字不能为空", code=400, status_code=400)
 
     essay.final_text = final_text
+    # title 为 None 表示"本次不改标题"（Worker 自动抽取的结果得以保留）；传字符串则按老师意图覆盖。
+    if payload.title is not None:
+        essay.title = payload.title.strip()[:200]
     if payload.proofread:
         essay.status = "proofread"
         essay.proofread_at = utcnow_iso()
@@ -226,3 +231,55 @@ async def update_essay(
     refreshed = await _load_essay(session, essay_id)
     assert refreshed is not None  # 刚提交过，必然存在
     return envelope(essay_to_detail(refreshed).model_dump(), message="已保存")
+
+
+@router.post("/essays/{essay_id}/recognize", status_code=202, response_model=Envelope[RecognizeRerunOut])
+async def rerun_recognize(
+    request: Request, essay_id: int, session: SessionDep, _auth: AuthDep
+) -> dict[str, Any]:
+    """重新排队识别（FR-10：给识别失败/结果不满意的稿子一个出口）。
+
+    语义：整篇重跑——清空各张的 engine1_text / engine2_text / diff_json（这三列
+    "识别落库后只读"仅指正常流程内不增量改写，重跑是**整体重写**），把该篇最新任务
+    置回 ``queued``、清除 ``error``、``retry_count += 1``，并唤醒 Worker。
+
+    Raises:
+        ApiError: 404 作文不存在；409 已定稿（不可覆盖老师成果）；400 该篇无原片。
+    """
+    essay = await _load_essay(session, essay_id)
+    if essay is None:
+        raise ApiError("作文不存在", code=404, status_code=404)
+    if essay.status == "proofread":
+        raise ApiError("该篇已定稿，不可覆盖", code=409, status_code=409)
+    if not essay.photos:
+        raise ApiError("该篇没有原片，无法识别", code=400, status_code=400)
+
+    for photo in essay.photos:
+        photo.engine1_text = None
+        photo.engine2_text = None
+        photo.diff_json = None
+
+    task = _latest_task(essay)
+    if task is None:
+        task = RecognitionTask(essay_id=essay.id, step="queued", retry_count=0, updated_at=utcnow_iso())
+        session.add(task)
+    task.step = "queued"
+    task.error = None
+    task.retry_count = int(task.retry_count or 0) + 1
+    task.updated_at = utcnow_iso()
+    essay.status = "recognizing"
+    await session.commit()
+
+    worker = getattr(request.app.state, "worker", None)
+    if worker is not None:
+        await worker.enqueue(essay.id)
+
+    result = RecognizeRerunOut(essay_id=essay.id, status=essay.status, task=task_to_out(task))
+    return envelope(result.model_dump(), message="已重新排队识别")
+
+
+def _latest_task(essay: Essay) -> RecognitionTask | None:
+    """取该篇最新一条识别任务（一期约定一篇一任务；多条时按 id 最大）。"""
+    if not essay.tasks:
+        return None
+    return max(essay.tasks, key=lambda task: task.id or 0)

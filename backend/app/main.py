@@ -18,16 +18,20 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy import func, select, text
+from sqlalchemy.ext.asyncio import AsyncEngine
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.responses import Response
 from starlette.types import Scope
 
-from app.auth import AuthManager
-from app.config import get_settings
+from app import __version__
+from app.auth import AuthManager, LoginRateLimiter
+from app.config import AppSettings, get_settings
 from app.db import create_engine, create_session_factory, init_db
+from app.models import RecognitionTask
 from app.pipeline.worker import build_worker
 from app.routers import auth_router, essays, exports, issues, photos, students
-from app.schemas import ApiError
+from app.schemas import ApiError, HealthOut, MetaOut, envelope
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +90,27 @@ class _SpaStaticFiles(StaticFiles):
             raise
 
 
+async def _probe_database(request: Request) -> tuple[bool, int | None]:
+    """真跑一条 ``SELECT 1`` 并统计待处理识别任务，返回 ``(db_ok, pending_tasks)``。
+
+    探针必须走业务同一个引擎/连接池：只有这样"进程活着但库打不开（磁盘满、文件被
+    占用、权限错）"才会被 systemd / 外部拨测发现。探测失败不抛异常，交由 /api/health
+    降级表达。
+    """
+    engine: AsyncEngine = request.app.state.engine
+    try:
+        async with engine.connect() as conn:
+            await conn.execute(text("SELECT 1"))
+            stmt = select(func.count()).select_from(RecognitionTask).where(
+                RecognitionTask.step != "done"
+            )
+            pending = (await conn.execute(stmt)).scalar_one()
+        return True, int(pending)
+    except Exception as exc:  # noqa: BLE001 - 健康探针须吞掉一切 DB 异常
+        logger.warning("数据库探针失败：%s", exc)
+        return False, None
+
+
 def _mount_frontend(app: FastAPI) -> None:
     """若前端已构建，则把 dist 挂到根路径（SPA，放在所有 /api 路由之后）。"""
     dist = Path(__file__).resolve().parents[2] / "frontend" / "dist"
@@ -107,8 +132,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.engine = engine
     app.state.session_factory = session_factory
     app.state.auth = AuthManager.from_settings(settings)
+    # 登录限速状态挂在 app 上：进程内内存，随应用重启清零（见 app.auth 的取舍说明）。
+    app.state.login_limiter = LoginRateLimiter()
 
-    worker = build_worker(settings, session_factory)
+    # 并发度经 AppSettings.worker_concurrency() 钳制（1~8）后注入 Worker。
+    worker = build_worker(settings, session_factory, concurrency=settings.worker_concurrency())
     app.state.worker = worker
 
     if settings.worker_enabled:
@@ -129,7 +157,7 @@ def create_app() -> FastAPI:
     """构造 FastAPI 应用。"""
     application = FastAPI(
         title="班级作文工作台 API",
-        version="0.1.0",
+        version=__version__,
         description="双引擎 OCR + 字符级 diff + 校对定稿（一期）",
         lifespan=lifespan,
     )
@@ -151,9 +179,39 @@ def create_app() -> FastAPI:
     application.include_router(exports.router)
 
     @application.get("/api/health", tags=["meta"])
-    async def health() -> dict[str, Any]:
-        """健康检查。"""
-        return {"code": 0, "data": {"status": "ok"}, "message": ""}
+    async def health(request: Request) -> JSONResponse:
+        """健康检查（FR-13）：连通性 + 版本 + DB 可用性 + 待处理识别任务数。
+
+        DB 不可用时 ``status="degraded"`` 且信封 ``code`` **非零**（HTTP 503）——
+        v1.2 契约：``code=0`` 唯一表示成功，前端/拨测不能把降级当成正常。
+        """
+        db_ok, pending = await _probe_database(request)
+        payload = HealthOut(
+            status="ok" if db_ok else "degraded",
+            version=__version__,
+            db_ok=db_ok,
+            pending_tasks=pending,
+        )
+        if db_ok:
+            return JSONResponse(status_code=200, content=envelope(payload.model_dump()))
+        return JSONResponse(
+            status_code=503,
+            content={
+                "code": 503,
+                "data": payload.model_dump(),
+                "message": "数据库不可用",
+            },
+        )
+
+    @application.get("/api/meta", tags=["meta"])
+    async def meta(request: Request) -> dict[str, Any]:
+        """免鉴权元信息（FR-13）：只回班级名与版本，供前端顶栏展示。
+
+        刻意不含任何学生/作文数据，登录页也要能显示班级名。
+        """
+        settings: AppSettings = request.app.state.settings
+        payload = MetaOut(class_name=settings.class_name, version=__version__)
+        return envelope(payload.model_dump())
 
     _mount_frontend(application)
     return application

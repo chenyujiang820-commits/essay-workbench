@@ -1,6 +1,10 @@
 /**
- * 拍照 / 多图上传：手机浏览器调用相机（capture=environment），一张或多张原片
- * 一次提交为一篇作文。上传前用 canvas 压缩到最长边 ≤2000px / 质量 0.85。
+ * 拍照 / 多图上传：一张或多张原片一次提交为一篇作文。上传前用 canvas 压缩到
+ * 最长边 ≤2000px / 质量 0.85，并在选图当场判定画质是否低于手写识别门槛。
+ *
+ * v1.2 增补：
+ * * FR-10 / GAP-02「拍摄要点」引导卡（正光 / 垂直 / 铺满 / 分辨率下限）；
+ * * 低画质原片打角标 + 汇总提示，**只提醒不阻断**（老师可能只有这一张）。
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -8,7 +12,8 @@ import { useNavigate, useParams } from "react-router-dom";
 
 import { ApiError, api } from "../api/client";
 import type { Issue, Student, UploadResult } from "../api/types";
-import { compressImages } from "../lib/image";
+import { useClassName } from "../lib/classMeta";
+import { isLowResolution, processImages } from "../lib/image";
 
 /** 安全创建 objectURL（jsdom / 隐私模式下可能不可用）。 */
 function safeCreateObjectURL(file: File): string {
@@ -28,6 +33,8 @@ export default function UploadPage() {
   const [studentId, setStudentId] = useState("");
   const [files, setFiles] = useState<File[]>([]);
   const [thumbs, setThumbs] = useState<string[]>([]);
+  /** 与 files 同序的画质判定结果（true = 低于手写识别门槛）。 */
+  const [lowRes, setLowRes] = useState<boolean[]>([]);
   const [compressing, setCompressing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -46,6 +53,7 @@ export default function UploadPage() {
   );
 
   const numericIssueId = Number(issueId);
+  const className = useClassName();
 
   const load = useCallback(async () => {
     setError("");
@@ -75,10 +83,15 @@ export default function UploadPage() {
     setError("");
     setCompressing(true);
     try {
-      const compressed = await compressImages(picked);
-      const urls = compressed.map(safeCreateObjectURL);
-      setFiles((previous) => [...previous, ...compressed]);
-      setThumbs((previous) => [...previous, ...urls]);
+      // processImages 只解码一次就同时给出压缩产物与**原图**尺寸：画质必须按原图判，
+      // 否则 4000×3000 的手写页被压到 2000×1500 后会被误判为偏低。
+      const processed = await processImages(picked);
+      setFiles((previous) => [...previous, ...processed.map((item) => item.file)]);
+      setThumbs((previous) => [...previous, ...processed.map((item) => safeCreateObjectURL(item.file))]);
+      setLowRes((previous) => [
+        ...previous,
+        ...processed.map((item) => isLowResolution(item.width, item.height)),
+      ]);
     } catch {
       setError("图片处理失败，请重试或换一张照片");
     } finally {
@@ -98,6 +111,7 @@ export default function UploadPage() {
       return previous.filter((_, position) => position !== index);
     });
     setFiles((previous) => previous.filter((_, position) => position !== index));
+    setLowRes((previous) => previous.filter((_, position) => position !== index));
   }
 
   function clearFiles(): void {
@@ -106,6 +120,7 @@ export default function UploadPage() {
       return [];
     });
     setFiles([]);
+    setLowRes([]);
   }
 
   async function handleSubmit(): Promise<void> {
@@ -139,12 +154,16 @@ export default function UploadPage() {
         );
   const studentSelectedHidden =
     studentId !== "" && !filteredStudents.some((student) => String(student.id) === studentId);
+  const lowResCount = lowRes.filter(Boolean).length;
 
   return (
     <main className="mx-auto max-w-2xl px-4 py-6 sm:px-6 sm:py-8">
       <header className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-xl font-semibold text-slate-900">
           上传原片{issue ? ` · 第 ${issue.issue_no} 期` : ""}
+          {className ? (
+            <span className="ml-2 text-sm font-normal text-slate-500">{className}</span>
+          ) : null}
         </h1>
         <div className="flex gap-2">
           <button
@@ -164,6 +183,23 @@ export default function UploadPage() {
           </button>
         </div>
       </header>
+
+      <section
+        data-testid="capture-guide"
+        className="mt-6 flex flex-col rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-slate-700"
+      >
+        {/* 拍摄引导直接决定识别率：斜拍/背光/低分辨率会让视觉模型更容易"编字"（PRD 附录A 实测）。
+            桌面端可折叠省屏；手机首屏虽紧，但这几句更不能藏起来，故折叠仅在 lg 生效。 */}
+        <summary className="-mx-1 cursor-pointer select-none px-1 font-medium text-sky-900">
+          拍摄要点（直接影响识别准确率）
+        </summary>
+        <ul className="mt-2 space-y-1 text-xs leading-6 text-slate-600 sm:text-sm">
+          <li>1. 光线要正：别背光，也别让手或手机在纸上留阴影。</li>
+          <li>2. 本子放平，手机垂直俯拍，不要斜着拍。</li>
+          <li>3. 字铺满画面，一页拍一张，不要把两页挤进一张。</li>
+          <li>4. 照片短边不低于 600、长边不低于 800 像素，太模糊识别错字会明显变多。</li>
+        </ul>
+      </section>
 
       <section className="mt-6 rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
         <label className="block text-sm font-medium text-slate-700" htmlFor="student">
@@ -215,6 +251,12 @@ export default function UploadPage() {
 
         {compressing ? <p className="mt-2 text-sm text-slate-500">压缩中…</p> : null}
 
+        {files.length > 0 && lowResCount > 0 ? (
+          <p className="mt-3 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800">
+            {lowResCount} 张画质偏低，识别准确率会下降，建议重拍（仍可继续上传）。
+          </p>
+        ) : null}
+
         {files.length > 0 ? (
           <div className="mt-3">
             <p className="text-sm text-slate-600">已选 {files.length} 张：</p>
@@ -232,6 +274,15 @@ export default function UploadPage() {
                       {file.name.slice(0, 12)}
                     </div>
                   )}
+                  {lowRes[index] ? (
+                    <span
+                      data-testid="low-res-badge"
+                      title="短边不足 600 或长边不足 800 像素，识别准确率会下降，建议重拍"
+                      className="absolute bottom-1 left-0 rounded bg-amber-500 px-1.5 py-0.5 text-[10px] font-medium text-white shadow-sm"
+                    >
+                      画质偏低
+                    </span>
+                  ) : null}
                   <button
                     type="button"
                     aria-label={`删除第 ${index + 1} 张`}

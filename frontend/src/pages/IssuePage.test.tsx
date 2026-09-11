@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { RouterProvider, createMemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { api } from "../api/client";
+import { ApiError, api } from "../api/client";
 import type { Issue } from "../api/types";
 import IssuePage from "./IssuePage";
 
@@ -96,5 +96,69 @@ describe("IssuePage 删除期数", () => {
     fireEvent.click(screen.getAllByRole("button", { name: "删除" })[0]);
     await waitFor(() => expect(screen.getByText("删除失败，请重试")).toBeTruthy());
     confirmSpy.mockRestore();
+  });
+
+});
+
+describe("IssuePage 编辑期数（v1.2 OPT-02）", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(api.listIssues).mockResolvedValue([issueOf(1, 1, 2)]);
+  });
+
+  it("opens an inline form prefilled with the current issue_no and week", async () => {
+    renderIssuePage();
+    await screen.findByText("第 1 期");
+
+    fireEvent.click(screen.getByTestId("edit-issue"));
+    const no = (await screen.findByTestId("edit-issue-no")) as HTMLInputElement;
+    const week = (await screen.findByTestId("edit-week")) as HTMLInputElement;
+    expect(no.value).toBe("1");
+    expect(week.value).toBe("2026-09-07");
+  });
+
+  it("sends PATCH with both fields and refreshes the list on success", async () => {
+    const update = vi
+      .spyOn(api, "updateIssue")
+      .mockResolvedValue(issueOf(1, 9, 2));
+    renderIssuePage();
+    await screen.findByText("第 1 期");
+
+    fireEvent.click(screen.getByTestId("edit-issue"));
+    fireEvent.change(await screen.findByTestId("edit-issue-no"), { target: { value: "9" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+
+    await waitFor(() => expect(update).toHaveBeenCalledWith(1, { issue_no: 9, week_start_date: "2026-09-07" }));
+    await waitFor(() => expect(api.listIssues).toHaveBeenCalledTimes(2));
+    update.mockRestore();
+  });
+
+  it("surfaces the backend message when the issue number collides", async () => {
+    const update = vi
+      .spyOn(api, "updateIssue")
+      .mockRejectedValue(new ApiError("期号 1 已存在", 409, 409));
+    renderIssuePage();
+    await screen.findByText("第 1 期");
+
+    fireEvent.click(screen.getByTestId("edit-issue"));
+    await screen.findByTestId("edit-issue-no");
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+
+    await waitFor(() => expect(screen.getByText("期号 1 已存在")).toBeTruthy());
+    update.mockRestore();
+  });
+
+  it("rejects an illegal issue number locally without calling the API", async () => {
+    const update = vi.spyOn(api, "updateIssue");
+    renderIssuePage();
+    await screen.findByText("第 1 期");
+
+    fireEvent.click(screen.getByTestId("edit-issue"));
+    fireEvent.change(await screen.findByTestId("edit-issue-no"), { target: { value: "0" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+
+    await waitFor(() => expect(screen.getByText(/合法的期号/)).toBeTruthy());
+    expect(update).not.toHaveBeenCalled();
+    update.mockRestore();
   });
 });

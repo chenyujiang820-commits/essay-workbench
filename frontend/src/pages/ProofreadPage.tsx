@@ -1,21 +1,38 @@
 /**
  * 校对环核心：桌面左右分栏（左原片 / 右 diff + 可编辑定稿），移动端上下堆叠可切换。
  *
- * * 顶部：整篇低置信横幅（low_confidence=1）+ 恒定操作提示条；
- * * 点击右侧存疑段落 → 高亮并切换到对应序号的左侧原片；
- * * 「保存并定稿」PATCH（final_text 非空 + proofread=true）后返回看板；
+ * * 顶部：PRD 强制警示条（常显、不可关闭）+ 标题输入框 + 整篇低置信横幅；
+ * * 点击右侧存疑段落 → 高亮并切换到对应序号的左侧原片，并记入「已查看」集合；
+ * * 识别失败（status=failed）给专门提示 +「重新识别」入口（FR-10），此时不提供定稿按钮；
+ * * 「保存并定稿」PATCH（final_text 非空 + title + proofread=true）后返回看板；
+ *   仍有存疑处未点看时先给一次非阻断确认（FR-09）；
  * * 有未保存修改时离开页面需二次确认。
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useBlocker, useNavigate, useParams } from "react-router-dom";
 
 import { ApiError, api } from "../api/client";
 import type { EssayDetail, Photo } from "../api/types";
-import DiffText, { composeInitialText } from "../components/DiffText";
+import DiffText, { composeInitialText, listSuspectKeys } from "../components/DiffText";
 import PhotoViewer from "../components/PhotoViewer";
 
 const EMPTY_PHOTOS: Photo[] = [];
+
+/** 移动端分栏键。 */
+type PaneKey = "photo" | "text";
+
+/** 移动端上下堆叠时的两个分栏（顺序即按钮顺序）。 */
+const PANE_LABELS: ReadonlyArray<readonly [PaneKey, string]> = [
+  ["photo", "原片"],
+  ["text", "文字"],
+];
+
+/**
+ * PRD v1.2 FR-09 强制警示文案（逐字对齐，不可改写、不可折叠、移动端不隐藏）。
+ * 这是 v1.1 §9.2「编字风险三重防线」之一，缺文案即视为验收不通过（AC-2）。
+ */
+const AI_CAUTION_TEXT = "AI 可能会把同学的错字“改对”，请逐句以原片为准。";
 
 /** 加载各原片的 objectURL，并在卸载 / 变化时回收，避免内存泄漏。 */
 function usePhotoUrls(photos: Photo[]): Record<number, string> {
@@ -57,6 +74,73 @@ function usePhotoUrls(photos: Photo[]): Record<number, string> {
   return urls;
 }
 
+/**
+ * OPT-01 / FR-09 存疑清点：持有本次会话内的「已点看」集合，并在仍有未点看存疑处时
+ * 给出**一次**非阻断确认。集合不持久化（离开页面即随组件卸载复位）。
+ */
+function useSuspectReview(photos: Photo[]) {
+  const [viewedSuspects, setViewedSuspects] = useState<Set<string>>(() => new Set<string>());
+  const suspectKeys = useMemo(() => listSuspectKeys(photos), [photos]);
+
+  const markViewed = useCallback((key: string) => {
+    setViewedSuspects((prev) => (prev.has(key) ? prev : new Set(prev).add(key)));
+  }, []);
+  const resetViewed = useCallback(() => setViewedSuspects(new Set<string>()), []);
+
+  const unviewedCount = suspectKeys.filter((key) => !viewedSuspects.has(key)).length;
+
+  /** 返回 true 表示可以继续保存；false 表示用户选择留下继续核对。 */
+  const confirmUnviewed = useCallback((): boolean => {
+    if (unviewedCount === 0) {
+      return true;
+    }
+    return window.confirm(`本篇还有 ${unviewedCount} 处存疑未逐一点看，确认已核对？`);
+  }, [unviewedCount]);
+
+  return { viewedSuspects, markViewed, resetViewed, confirmUnviewed };
+}
+
+/** 失败原因摘要：过长任务错误只取首 120 字，避免挤占校对版面。 */
+function briefTaskError(error: string | null | undefined): string {
+  const trimmed = (error ?? "").trim();
+  if (!trimmed) {
+    return "";
+  }
+  return trimmed.length > 120 ? `${trimmed.slice(0, 120)}…` : trimmed;
+}
+
+/** 顶部提示条的统一样式（配色集中在此，避免各处复制 className）。 */
+const NOTICE_TONES = {
+  /** FR-09 强制警示：rose 底 + 描边，字号不小于正文说明行，移动端同样整行可见。 */
+  caution: "border border-rose-300 bg-rose-100 font-medium leading-6 text-rose-800",
+  warning: "bg-amber-100 text-amber-800",
+  danger: "bg-rose-50 text-rose-600",
+  success: "bg-emerald-50 text-emerald-700",
+  hint: "bg-slate-100 text-slate-500",
+} as const;
+
+/** 页面内次要按钮的统一样式（返回、重试等）。 */
+const GHOST_BUTTON = "rounded-md border border-slate-300 px-3 py-1.5 text-sm text-slate-700";
+
+function Notice({
+  tone,
+  testId,
+  children,
+}: {
+  tone: keyof typeof NOTICE_TONES;
+  testId?: string;
+  children: ReactNode;
+}) {
+  return (
+    <p
+      data-testid={testId}
+      className={`mt-3 rounded-md px-4 py-2 text-sm break-words ${NOTICE_TONES[tone]}`}
+    >
+      {children}
+    </p>
+  );
+}
+
 export default function ProofreadPage() {
   const { essayId } = useParams();
   const navigate = useNavigate();
@@ -65,12 +149,20 @@ export default function ProofreadPage() {
   const [essay, setEssay] = useState<EssayDetail | null>(null);
   const [value, setValue] = useState("");
   const [initialText, setInitialText] = useState("");
+  const [title, setTitle] = useState("");
+  const [initialTitle, setInitialTitle] = useState("");
   const [activeSeq, setActiveSeq] = useState(1);
-  const [pane, setPane] = useState<"photo" | "text">("photo");
+  const [pane, setPane] = useState<PaneKey>("photo");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState("");
+  const [retrying, setRetrying] = useState(false);
+  const [retryNotice, setRetryNotice] = useState("");
+
+  const review = useSuspectReview(essay?.photos ?? EMPTY_PHOTOS);
+  // 仅取稳定引用的复位函数：避免 review 对象每次渲染新建导致 load 身份抖动（无限重加载）。
+  const { resetViewed } = review;
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -84,13 +176,17 @@ export default function ProofreadPage() {
           : composeInitialText(detail.photos);
       setValue(seed);
       setInitialText(seed);
+      setTitle(detail.title ?? "");
+      setInitialTitle(detail.title ?? "");
+      // 重新载入即视为一次新的核对会话，存疑清点随之复位。
+      resetViewed();
       setActiveSeq(detail.photos[0]?.seq ?? 1);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "作文加载失败");
     } finally {
       setLoading(false);
     }
-  }, [numericEssayId]);
+  }, [numericEssayId, resetViewed]);
 
   useEffect(() => {
     void load();
@@ -103,7 +199,10 @@ export default function ProofreadPage() {
     [photos, activeSeq],
   );
 
-  const dirty = value !== initialText;
+  // 标题是一等字段（FR-11）：改标题未保存同样算「脏」。
+  const dirty = value !== initialText || title !== initialTitle;
+  const failed = essay?.status === "failed";
+  const taskErrorBrief = briefTaskError(essay?.task?.error);
 
   // 保存成功后的返回跳转不算「未保存离开」（ref 即时读取，不受渲染时序影响）。
   const savedNavRef = useRef(false);
@@ -142,20 +241,42 @@ export default function ProofreadPage() {
     navigate(`/issues/${essay?.issue_id ?? ""}/essays`);
   }
 
+  /** FR-10 / GAP-05：识别失败稿一键重新排队识别。 */
+  async function handleRetry(): Promise<void> {
+    setRetrying(true);
+    setError("");
+    try {
+      await api.retryEssay(numericEssayId);
+      await load();
+      setRetryNotice("已重新排队识别");
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "重新识别失败，请稍后再试");
+    } finally {
+      setRetrying(false);
+    }
+  }
+
   async function handleSave(): Promise<void> {
     if (!value.trim()) {
       setError("定稿文字不能为空");
       return;
     }
+    // FR-09：仍有存疑处未逐一点看时，先给一次非阻断确认；取消则留在本页继续核对。
+    if (!review.confirmUnviewed()) {
+      return;
+    }
     setSaving(true);
     setError("");
+    setSaved(false);
     try {
       const saved = await api.updateEssay(numericEssayId, {
         final_text: value,
         proofread: true,
+        title,
       });
       setEssay(saved);
       setInitialText(value);
+      setInitialTitle(title);
       savedNavRef.current = true;
       // 给一句可见的成功反馈，再返回看板。
       setSaved(true);
@@ -181,14 +302,14 @@ export default function ProofreadPage() {
           <button
             type="button"
             onClick={() => void load()}
-            className="rounded-md border border-slate-300 px-3 py-1.5 text-sm text-slate-700"
+            className={GHOST_BUTTON}
           >
             重试
           </button>
           <button
             type="button"
             onClick={() => navigate("/")}
-            className="rounded-md border border-slate-300 px-3 py-1.5 text-sm text-slate-700"
+            className={GHOST_BUTTON}
           >
             返回首页
           </button>
@@ -200,78 +321,116 @@ export default function ProofreadPage() {
   return (
     <main className="mx-auto flex h-dvh max-w-7xl flex-col px-3 py-4 sm:px-4">
       <header className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-3">
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={() => navigate("/")}
-            data-testid="back-home"
-            className="rounded-md border border-slate-300 px-3 py-1.5 text-sm text-slate-700"
-          >
-            期数列表
-          </button>
-          <button
-            type="button"
-            onClick={handleBack}
-            className="rounded-md border border-slate-300 px-3 py-1.5 text-sm text-slate-700"
-          >
-            ← 看板
-          </button>
-        </div>
-          <h1 className="text-lg font-semibold text-slate-900">
+        <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2">
+          <div className="flex shrink-0 items-center gap-2">
+            <button
+              type="button"
+              onClick={() => navigate("/")}
+              data-testid="back-home"
+              className={GHOST_BUTTON}
+            >
+              期数列表
+            </button>
+            <button type="button" onClick={handleBack} className={GHOST_BUTTON}>
+              ← 看板
+            </button>
+          </div>
+          <h1 className="min-w-0 truncate text-lg font-semibold text-slate-900">
             逐句校对 · {essay.student_name ?? `#${essay.student_id}`}
           </h1>
-          {dirty ? <span className="text-xs text-amber-600">未保存</span> : null}
+          {dirty ? <span className="shrink-0 text-xs text-amber-600">未保存</span> : null}
         </div>
-        <button
-          type="button"
-          disabled={saving}
-          onClick={handleSave}
-          className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-60"
-        >
-          {saving ? "保存中…" : "保存并定稿"}
-        </button>
+        <div className="flex shrink-0 items-center gap-2">
+          {failed ? (
+            <button
+              type="button"
+              data-testid="failed-retry"
+              disabled={retrying}
+              onClick={() => void handleRetry()}
+              className="rounded-md bg-rose-700 px-4 py-2 text-sm font-medium text-white disabled:opacity-60"
+            >
+              {retrying ? "排队中…" : "重新识别"}
+            </button>
+          ) : (
+            <button
+              type="button"
+              data-testid="save-proofread"
+              disabled={saving}
+              onClick={() => void handleSave()}
+              className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-60"
+            >
+              {saving ? "保存中…" : "保存并定稿"}
+            </button>
+          )}
+        </div>
       </header>
 
+      {/* FR-09 强制警示：常显、不可关闭、不进 details、移动端不隐藏（AC-2）。 */}
+      <Notice tone="caution" testId="ai-warning">
+        {AI_CAUTION_TEXT}
+      </Notice>
+
+      <label className="mt-3 flex flex-wrap items-center gap-2 text-sm font-medium text-slate-700">
+        <span className="shrink-0">标题</span>
+        <input
+          data-testid="essay-title"
+          type="text"
+          value={title}
+          maxLength={200}
+          disabled={saving}
+          placeholder="识别自动抽取，可修改；留空时成册与投屏显示「未命名」"
+          onChange={(event) => setTitle(event.target.value)}
+          className="min-w-0 flex-1 rounded-md border border-slate-300 px-3 py-1.5 text-base outline-none focus:border-slate-500 disabled:bg-slate-50"
+        />
+      </label>
+
       {essay.low_confidence === 1 ? (
-        <p className="mt-3 rounded-md bg-amber-100 px-4 py-2 text-sm text-amber-800">
-          本篇识别置信度偏低，请重点核对全部存疑处后再定稿。
-        </p>
+        <Notice tone="warning">本篇识别置信度偏低，请重点核对全部存疑处后再定稿。</Notice>
       ) : null}
 
-      <p className="mt-3 rounded-md bg-slate-100 px-4 py-2 text-xs text-slate-500">
-        左侧为原片（可缩放），右侧上方编辑定稿文字，下方「识别对照」黄色为引擎存疑处；点击存疑处可定位对应原片。核对后点击「保存并定稿」。
-      </p>
-
-      {error ? (
-        <p className="mt-3 rounded-md bg-rose-50 px-4 py-2 text-sm text-rose-600">{error}</p>
+      {failed ? (
+        <div
+          data-testid="failed-notice"
+          className="mt-3 rounded-md border border-rose-300 bg-rose-50 px-4 py-3 text-sm text-rose-700"
+        >
+          <p className="font-medium">本篇识别失败，没有可校对的识别结果。</p>
+          <p className="mt-1 break-words text-xs leading-5 text-rose-600">
+            {taskErrorBrief || "识别服务未返回具体原因，可直接重新排队识别。"}
+          </p>
+          <p className="mt-1 text-xs leading-5 text-rose-500">
+            排队完成后回看板刷新即可进入校对；期间本篇不可定稿。
+          </p>
+        </div>
       ) : null}
+
+      {failed ? null : (
+        <Notice tone="hint">
+          左侧为原片（可缩放），右侧上方填写标题与定稿文字，下方「识别对照」黄色为引擎存疑处；
+          逐个点看存疑处可标记「已查看」并定位对应原片。核对后点击「保存并定稿」。
+        </Notice>
+      )}
+
+      {error ? <Notice tone="danger">{error}</Notice> : null}
+
+      {retryNotice ? <Notice tone="success" testId="retry-notice">{retryNotice}</Notice> : null}
 
       {saved ? (
-        <p className="mt-3 rounded-md bg-emerald-50 px-4 py-2 text-sm text-emerald-700">
-          已定稿保存成功，正在返回看板…
-        </p>
+        <Notice tone="success">已定稿保存成功，正在返回看板…</Notice>
       ) : null}
 
       <div className="mt-3 flex gap-2 lg:hidden">
-        <button
-          type="button"
-          onClick={() => setPane("photo")}
-          className={`flex-1 rounded-md px-3 py-2 text-sm ${
-            pane === "photo" ? "bg-slate-900 text-white" : "border border-slate-300 text-slate-700"
-          }`}
-        >
-          原片
-        </button>
-        <button
-          type="button"
-          onClick={() => setPane("text")}
-          className={`flex-1 rounded-md px-3 py-2 text-sm ${
-            pane === "text" ? "bg-slate-900 text-white" : "border border-slate-300 text-slate-700"
-          }`}
-        >
-          文字
-        </button>
+        {PANE_LABELS.map(([key, label]) => (
+          <button
+            key={key}
+            type="button"
+            onClick={() => setPane(key)}
+            className={`flex-1 rounded-md px-3 py-2 text-sm ${
+              pane === key ? "bg-slate-900 text-white" : "border border-slate-300 text-slate-700"
+            }`}
+          >
+            {label}
+          </button>
+        ))}
       </div>
 
       <div className="mt-3 grid min-h-0 flex-1 gap-4 lg:grid-cols-2">
@@ -298,6 +457,7 @@ export default function ProofreadPage() {
             <PhotoViewer
               url={activePhoto ? photoUrls[activePhoto.id] ?? null : null}
               seq={activePhoto?.seq ?? 1}
+              lowResolution={activePhoto?.low_resolution === 1}
             />
           </div>
         </section>
@@ -308,6 +468,8 @@ export default function ProofreadPage() {
             value={value}
             onChange={setValue}
             onSelectPhoto={setActiveSeq}
+            viewedSuspects={review.viewedSuspects}
+            onSuspectView={review.markViewed}
             disabled={saving}
           />
         </section>

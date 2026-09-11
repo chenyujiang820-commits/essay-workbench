@@ -60,6 +60,18 @@
         margin-bottom: 3mm;
       }
       .toc li .n { color: #0f766e; }
+      .toc .meta { margin: 2mm 0 0; font-size: 10.5pt; color: #0f766e; }
+      .flag {
+        display: inline-block;
+        margin-left: 2mm;
+        padding: 0.3mm 2.4mm;
+        border-radius: 999px;
+        background: #fff;
+        border: 1px solid #fbcfe8;
+        color: #db2777;
+        font-size: 8.5pt;
+        vertical-align: middle;
+      }
       .essay { page-break-before: always; }
       .card {
         border: 2px solid #fdba74;
@@ -95,6 +107,30 @@
       }
       .essay .body p { margin: 0 0 4mm; text-indent: 2em; }
       .essay .empty { color: #94a3b8; text-indent: 0; }
+      /* 评语位：仅当 item.comment 非空时渲染，否则不产生任何 DOM */
+      .essay .comment { position: relative; margin: 6mm 0 0 5mm; }
+      .essay .comment::before {
+        content: "";
+        position: absolute;
+        left: -5mm;
+        top: 3mm;
+        width: 0;
+        height: 0;
+        border-top: 2.5mm solid transparent;
+        border-bottom: 2.5mm solid transparent;
+        border-right: 3mm solid #ffedd5;
+      }
+      .essay .comment-text {
+        margin: 0;
+        background: #fff7ed;
+        border: 1px solid #fed7aa;
+        border-radius: 5mm;
+        padding: 3mm 5mm;
+        color: #9a3412;
+        font-size: 11.5pt;
+        line-height: 1.75;
+        white-space: pre-wrap;
+      }
       .single { page-break-before: avoid; }
       .colophon { margin-top: 16mm; text-align: center; color: #94a3b8; font-size: 10pt; }
     </style>
@@ -104,12 +140,17 @@
     <article class="essay single">
       <div class="card">
         <div class="bar">
-          <h2 class="title">{{ item.title or '无题' }}{% if item.is_selected %}<span class="badge">★ 精选</span>{% endif %}</h2>
+          <h2 class="title">{{ item.title or '未命名' }}{% if item.is_selected %}<span class="badge">★ 精选</span>{% endif %}</h2>
         </div>
         <div class="chip">{{ item.name }}{% if item.student_no %} · {{ item.student_no }}{% endif %}</div>
         <div class="body">
           {% for p in item.paragraphs %}<p>{{ p }}</p>{% else %}<p class="empty">（正文待补）</p>{% endfor %}
         </div>
+        {% if item.comment %}
+        <div class="comment">
+          <p class="comment-text">🌟 老师想说：{{ item.comment }}</p>
+        </div>
+        {% endif %}
       </div>
       <div class="colophon">{{ class_name }} · 第 {{ issue_no }} 期</div>
     </article>
@@ -123,11 +164,12 @@
 
     <section class="toc">
       <h2>本 期 目 录</h2>
+      <div class="meta">{{ class_name }} · 第 {{ issue_no }} 期 · 周一起 {{ week_start_date }}</div>
       <ul>
         {% for item in items %}
         <li>
-          <span>{{ item.name }}{% if item.is_selected %} <span class="badge">★ 精选</span>{% endif %}</span>
-          <span class="n">{{ item.title or '无题' }}</span>
+          <span>{{ item.name }}{% if item.is_selected %} <span class="badge">★ 精选</span>{% endif %}{% if item.comment %}<span class="flag">评语</span>{% endif %}</span>
+          <span class="n">{{ item.title or '未命名' }}</span>
         </li>
         {% endfor %}
       </ul>
@@ -137,12 +179,17 @@
     <article class="essay">
       <div class="card">
         <div class="bar">
-          <h2 class="title">{{ item.title or '无题' }}{% if item.is_selected %}<span class="badge">★ 精选</span>{% endif %}</h2>
+          <h2 class="title">{{ item.title or '未命名' }}{% if item.is_selected %}<span class="badge">★ 精选</span>{% endif %}</h2>
         </div>
         <div class="chip">{{ item.name }}{% if item.student_no %} · {{ item.student_no }}{% endif %}</div>
         <div class="body">
           {% for p in item.paragraphs %}<p>{{ p }}</p>{% else %}<p class="empty">（正文待补）</p>{% endfor %}
         </div>
+        {% if item.comment %}
+        <div class="comment">
+          <p class="comment-text">🌟 老师想说：{{ item.comment }}</p>
+        </div>
+        {% endif %}
       </div>
     </article>
     {% endfor %}

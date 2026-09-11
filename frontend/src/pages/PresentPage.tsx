@@ -17,6 +17,9 @@ import { ApiError, api } from "../api/client";
 import type { PresentData } from "../api/types";
 import Pager from "../components/Pager";
 
+/** 无标题作文的兜底文案（FR-11：区别于误导性的「无题」，与成册模板同口径）。 */
+export const UNTITLED_LABEL = "未命名";
+
 /** 单段文本在测量容器中的位置（相对容器顶边）。 */
 export interface ScreenBox {
   top: number;
@@ -172,11 +175,14 @@ export default function PresentPage() {
 
   // 测量阶段：全部段落已渲染，按实际高度贪心切分 + 计算字号缩放。
   useLayoutEffect(() => {
-    if (layout !== null) {
+    if (layout !== null || loading || error || !currentItem) {
       return;
     }
     const box = measureRef.current;
     if (!box) {
+      // 数据与 loading 可能分属两次提交：此刻测量容器还没挂上，
+      // 直接 return 会永久停在测量态（标题/正文再也不渲染）。借用重测计数器再来一次。
+      setMeasureTick((tick) => tick + 1);
       return;
     }
     const boxTop = box.getBoundingClientRect().top;
@@ -202,7 +208,7 @@ export default function PresentPage() {
     const computed: ScreenLayout = { screens, scales };
     layoutsRef.current.set(safeEssayIndex, computed);
     setLayout(computed);
-  }, [layout, paragraphs, safeEssayIndex]);
+  }, [layout, paragraphs, safeEssayIndex, loading, error, currentItem]);
 
   const screenCount = layout?.screens.length ?? 1;
   const safeScreenIndex = Math.min(screenIndex, screenCount - 1);
@@ -338,8 +344,8 @@ export default function PresentPage() {
                         </span>
                       ) : null}
                     </div>
-                    <h1 data-testid="present-title" className="mb-8 text-present-lg font-bold">
-                      {currentItem.title || "无题"}
+                    <h1 data-testid="present-title" className="mb-8 break-words text-present-lg font-bold">
+                      {currentItem.title || UNTITLED_LABEL}
                     </h1>
                   </>
                 ) : (

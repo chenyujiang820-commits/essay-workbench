@@ -14,6 +14,7 @@ import json
 import secrets
 import sys
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from fastapi import Request
@@ -178,6 +179,124 @@ class AuthManager:
         if expires_at < current:
             return None
         return TokenClaims(subject=str(claims.get("sub", "teacher")), expires_at=expires_at)
+
+
+# ---------------------------------------------------------------------------
+# 登录失败限速（OPT-03）
+# ---------------------------------------------------------------------------
+#: 连续失败达到该次数后开始锁定（下一次请求即被拒）。
+LOGIN_FAILURE_LIMIT = 5
+
+#: 首次锁定秒数，其后按 2 的幂指数退避。
+LOGIN_BACKOFF_BASE_SECONDS = 1.0
+
+#: 单次锁定最长秒数（15 分钟），避免退避失控。
+LOGIN_BACKOFF_MAX_SECONDS = 900.0
+
+#: 锁定期内的统一文案。
+LOGIN_TOO_FREQUENT_MESSAGE = "尝试过于频繁，请稍后再试"
+
+
+@dataclass
+class _LoginBucket:
+    """单个客户端标识的失败计数与锁定截止时间。"""
+
+    failures: int = 0
+    locked_until: float = 0.0
+
+
+class LoginRateLimiter:
+    """进程内登录失败限速器：连续失败 -> 指数退避锁（1s、2s、4s … 最长 900s）。
+
+    设计取舍（一期为内网单用户场景，见 PRD v1.2 §7「鉴权」）：
+
+    * **状态只放进程内存**，不建表、不引 Redis；重启即清零。配合部署侧 ``--workers 1``
+      约束（见 deploy/systemd.service）才不会出现多进程各持一份计数。
+    * 成功登录立即清零，避免老师正常使用时被历史失败拖累。
+    * 目标是"抬高默认口令的爆破成本"，不是抗分布式伪造：锁最长 15 分钟自动解除，
+      不给攻击者留下把老师本人锁在门外的拒绝服务面。
+    """
+
+    def __init__(
+        self,
+        *,
+        failure_limit: int = LOGIN_FAILURE_LIMIT,
+        base_seconds: float = LOGIN_BACKOFF_BASE_SECONDS,
+        max_seconds: float = LOGIN_BACKOFF_MAX_SECONDS,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._failure_limit = max(1, int(failure_limit))
+        self._base_seconds = float(base_seconds)
+        self._max_seconds = float(max_seconds)
+        self._clock = clock
+        self._buckets: dict[str, _LoginBucket] = {}
+
+    def ensure_allowed(self, key: str) -> None:
+        """锁定期内抛 429；未锁定则静默返回。
+
+        Raises:
+            ApiError: 429，文案「尝试过于频繁，请稍后再试」。
+        """
+        bucket = self._buckets.get(key)
+        if bucket is None:
+            return
+        if bucket.locked_until - self._clock() > 0:
+            raise ApiError(LOGIN_TOO_FREQUENT_MESSAGE, code=429, status_code=429)
+
+    def register_failure(self, key: str) -> None:
+        """记一次失败；达到阈值后按 2 的幂设定锁定时长。"""
+        bucket = self._buckets.setdefault(key, _LoginBucket())
+        bucket.failures += 1
+        over = bucket.failures - self._failure_limit
+        if over >= 0:
+            seconds = min(self._max_seconds, self._base_seconds * (2.0**over))
+            bucket.locked_until = self._clock() + seconds
+
+    def reset(self, key: str) -> None:
+        """登录成功：清零该客户端的失败与锁定状态。"""
+        self._buckets.pop(key, None)
+
+    def failure_count(self, key: str) -> int:
+        """当前连续失败次数（测试与排障观察用）。"""
+        bucket = self._buckets.get(key)
+        return bucket.failures if bucket is not None else 0
+
+    def retry_after_seconds(self, key: str) -> float:
+        """剩余锁定秒数；未锁定为 0.0。"""
+        bucket = self._buckets.get(key)
+        if bucket is None:
+            return 0.0
+        return max(0.0, bucket.locked_until - self._clock())
+
+    def clear(self) -> None:
+        """清空全部状态（测试用）。"""
+        self._buckets.clear()
+
+
+def login_client_key(request: Request) -> str:
+    """提取「客户端标识」作为限速键。
+
+    优先取 ``X-Forwarded-For`` 首段：生产部署在 nginx 之后，``request.client.host``
+    恒为 127.0.0.1，直接用它会让整座校园共用一个限速桶。
+
+    ⚠️ 伪造风险：XFF 是客户端可自填的请求头，只有当反向代理**覆盖**该头时才可信。
+    deploy/nginx.conf 目前用 ``$proxy_add_x_forwarded_for``（追加而非覆盖），首段仍可能
+    是攻击者伪造值，因此本函数只是"尽力而为"的来源标识，不构成安全边界；上公网前应把
+    nginx 改成 ``proxy_set_header X-Forwarded-For $remote_addr;``（或直接只信
+    ``request.client.host``）。详见交付报告的风险登记。
+
+    Returns:
+        限速键；无法识别来源时回退 ``"unknown"``——宁可共享一个桶，也不要让
+        "取不到来源"退化成"完全不限速"。
+    """
+    forwarded = request.headers.get("x-forwarded-for", "")
+    if forwarded:
+        first = forwarded.split(",")[0].strip()
+        if first:
+            return first
+    client = getattr(request, "client", None)
+    host = getattr(client, "host", None)
+    return host or "unknown"
 
 
 # ---------------------------------------------------------------------------

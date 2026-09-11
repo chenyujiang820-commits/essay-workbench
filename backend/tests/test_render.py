@@ -33,6 +33,7 @@ def make_essay(
     title: str = "春天的校园",
     text: str = "第一段文字\n第二段文字",
     selected: int = 0,
+    comment: str | None = None,
 ) -> Essay:
     """构造带学生的轻量作文实例（无需数据库）。"""
     student = Student(student_no=student_no, name=name, active=1, created_at=utcnow_iso())
@@ -44,6 +45,7 @@ def make_essay(
         status="proofread",
         low_confidence=0,
         selected=selected,
+        teacher_comment=comment,
         created_at=utcnow_iso(),
     )
     essay.student = student
@@ -129,6 +131,142 @@ def test_split_paragraphs_drops_blank_lines() -> None:
 
 
 # ---------------------------------------------------------------------------
+# v1.2 / FR-12：评语位（条件渲染）+ FR-11 标题兜底
+# ---------------------------------------------------------------------------
+TEMPLATES_ALL: tuple[str, ...] = ("elegant", "playful", "formal")
+# 三套模板各自的评语特征文案；无评语时这些字样一个都不许出现
+COMMENT_MARKERS: dict[str, str] = {
+    "elegant": "教师评语",
+    "playful": "老师想说",
+    "formal": "师评",
+}
+COMMENT_KEYWORDS: tuple[str, ...] = ("教师评语", "老师想说", "师评")
+
+
+@pytest.mark.parametrize("template", TEMPLATES_ALL)
+def test_build_items_carries_comment(template: str) -> None:
+    """统一数据结构新增 comment 键，且只做 strip，不改其它键。"""
+    items = tpl.build_items([make_essay(comment="  结尾有力。  "), make_essay()])
+    assert [item["comment"] for item in items] == ["结尾有力。", ""]
+    assert set(items[0]) == {
+        "student_no",
+        "name",
+        "title",
+        "paragraphs",
+        "is_selected",
+        "comment",
+    }
+
+
+@pytest.mark.parametrize("template", TEMPLATES_ALL)
+def test_no_comment_renders_no_comment_dom(template: str) -> None:
+    """无评语（None / 空串 / 纯空白）时三套模板都不产生评语 DOM，一期视觉零回归。"""
+    meta = make_meta(template)
+    for comment in (None, "", "   \n  "):
+        essay = make_essay(comment=comment)
+        for rendered in (
+            tpl.render_book_html([essay], template, meta),
+            tpl.render_single_html(essay, template, meta),
+        ):
+            assert not any(keyword in rendered for keyword in COMMENT_KEYWORDS)
+            assert 'class="comment"' not in rendered
+            assert 'class="comment-text"' not in rendered
+            assert 'class="comment-label"' not in rendered
+            assert 'class="flag"' not in rendered
+
+
+@pytest.mark.parametrize("template", TEMPLATES_ALL)
+def test_comment_renders_with_template_marker(template: str) -> None:
+    """有评语时三套模板都渲染评语原文，并各自带上特征前缀/标签。"""
+    comment = "观察仔细，用词准确。"
+    meta = make_meta(template)
+    essay = make_essay(comment=comment)
+    for rendered in (
+        tpl.render_book_html([essay], template, meta),
+        tpl.render_single_html(essay, template, meta),
+    ):
+        assert comment in rendered
+        assert COMMENT_MARKERS[template] in rendered
+        assert 'class="comment"' in rendered
+
+
+@pytest.mark.parametrize("template", TEMPLATES_ALL)
+def test_comment_is_escaped(template: str) -> None:
+    """评语走自动转义：脚本/标签不破版，徽标字样只作为文字出现。"""
+    comment = '<script>x</script> <b class="badge">精选</b>'
+    meta = make_meta(template)
+    essay = make_essay(comment=comment)
+    for rendered in (
+        tpl.render_book_html([essay], template, meta),
+        tpl.render_single_html(essay, template, meta),
+    ):
+        assert "<script>" not in rendered
+        assert '<b class="badge">' not in rendered
+        assert "class=&#34;badge&#34;" in rendered
+        assert "&lt;script&gt;" in rendered
+        # 文本里的"精选"不生成真的徽标 DOM
+        assert 'class="badge"' not in rendered
+
+
+@pytest.mark.parametrize("template", TEMPLATES_ALL)
+def test_comment_newline_preserved(template: str) -> None:
+    """多行评语用 white-space: pre-wrap 保留换行（不拼接、不吞行）。"""
+    comment = "第一段评语\n第二段评语"
+    meta = make_meta(template)
+    essay = make_essay(comment=comment)
+    for rendered in (
+        tpl.render_book_html([essay], template, meta),
+        tpl.render_single_html(essay, template, meta),
+    ):
+        assert comment in rendered
+        assert "white-space: pre-wrap" in rendered
+
+
+@pytest.mark.parametrize("template", TEMPLATES_ALL)
+def test_badge_and_comment_coexist(template: str) -> None:
+    """精选徽标与评语同时存在时两者都渲染。"""
+    meta = make_meta(template)
+    rendered = tpl.render_book_html(
+        [make_essay(selected=1, comment="层次清楚。")], template, meta
+    )
+    assert 'class="badge"' in rendered
+    assert COMMENT_MARKERS[template] in rendered
+    assert "层次清楚。" in rendered
+    assert 'class="flag"' in rendered  # 目录同步标记该篇有评语
+
+
+@pytest.mark.parametrize("template", TEMPLATES_ALL)
+def test_title_fallback_is_unnamed(template: str) -> None:
+    """标题兜底改为"未命名"（FR-11），目录/正文/单篇一致。"""
+    meta = make_meta(template)
+    for title in ("", "   "):
+        essay = make_essay(title=title)
+        book = tpl.render_book_html([essay], template, meta)
+        single = tpl.render_single_html(essay, template, meta)
+        assert "无题" not in book
+        assert "无题" not in single
+        assert book.count("未命名") >= 2  # 目录一处 + 正文一处
+        assert "未命名" in single
+
+
+@pytest.mark.parametrize("template", TEMPLATES_ALL)
+def test_toc_shows_book_fields(template: str) -> None:
+    """目录页字段可见性与正文一致：班级名/期数/周起始日/姓名/标题/徽标/评语标记。"""
+    html = tpl.render_book_html(
+        [make_essay(selected=1, comment="有评语")], template, make_meta(template)
+    )
+    start = html.index('class="toc"')
+    section = html[start : html.index("</section>", start)]
+    assert "高一(1)班" in section
+    assert "第 3 期" in section
+    assert "2026-09-07" in section
+    assert "张三" in section
+    assert "春天的校园" in section
+    assert 'class="badge"' in section
+    assert 'class="flag"' in section
+
+
+# ---------------------------------------------------------------------------
 # 路由辅助
 # ---------------------------------------------------------------------------
 async def insert_student(
@@ -151,6 +289,7 @@ async def insert_essay(
     text: str = "第一段\n第二段",
     status: str = "proofread",
     selected: int = 0,
+    comment: str | None = None,
 ) -> int:
     async with session_factory() as session:
         essay = Essay(
@@ -161,6 +300,7 @@ async def insert_essay(
             status=status,
             low_confidence=0,
             selected=selected,
+            teacher_comment=comment,
             created_at=utcnow_iso(),
         )
         session.add(essay)
@@ -232,6 +372,31 @@ async def test_preview_returns_html(
     assert response.headers["content-type"].startswith("text/html")
     assert "张三" in response.text
     assert "李四" in response.text
+
+
+async def test_preview_renders_teacher_comment(
+    client: AsyncClient,
+    auth_headers: dict[str, str],
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """落库的 teacher_comment 能经导出链路出现在成册 HTML 评语位。"""
+    issue_id = await create_issue(client, auth_headers, 30)
+    student_id = await insert_student(session_factory, "S001", "张三")
+    await insert_essay(
+        session_factory,
+        issue_id=issue_id,
+        student_id=student_id,
+        title="春天",
+        comment="结尾有力。",
+    )
+
+    response = await client.get(
+        f"/api/exports/{issue_id}/preview",
+        params={"template": "formal"},
+        headers=auth_headers,
+    )
+    assert response.status_code == 200
+    assert "师评：结尾有力。" in response.text
 
 
 async def test_present_data(

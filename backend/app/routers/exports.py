@@ -224,7 +224,8 @@ async def create_single_export(
 
     template_key = tpl.validate_template(template)
     name = essay.student.name if essay.student is not None else str(essay.id)
-    title = (essay.title or "无题").strip() or "无题"
+    # 兜底文案与 PRD FR-11 / 成册模板一致："未命名"（"无题"会被误读成学生真的没写题目）
+    title = (essay.title or "未命名").strip() or "未命名"
     html = tpl.render_single_html(
         essay,
         template_key,
