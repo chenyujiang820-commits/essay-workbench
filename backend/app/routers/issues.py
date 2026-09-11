@@ -148,10 +148,18 @@ async def delete_issue(
     await session.delete(issue)  # 级联删除 essays -> photos / tasks（ORM delete-orphan）
     await session.commit()
 
-    # 原片目录按 issue 粒度整体清理（DB 提交成功后再删盘，失败仅残留空目录）。
+    # 原片目录按 issue 粒度整体清理。DB 已提交成功，磁盘清理失败不应把删除
+    # 报成 500（否则用户会以为删除没生效）：残留目录下次删除同号期数前可手工清。
+    photos_removed = True
     if essay_ids:
         photos_root = settings.photos_dir / str(issue_id)
         if photos_root.exists():
-            shutil.rmtree(photos_root, ignore_errors=True)
+            try:
+                shutil.rmtree(photos_root)
+            except OSError:
+                photos_removed = False
 
-    return envelope({"id": issue_id, "deleted_essays": len(essay_ids)}, message="期数已删除")
+    return envelope(
+        {"id": issue_id, "deleted_essays": len(essay_ids), "photos_removed": photos_removed},
+        message="期数已删除" if photos_removed else "期数已删除（原片目录清理失败，可忽略或手动删除）",
+    )

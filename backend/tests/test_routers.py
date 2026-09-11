@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from app.models import Student, utcnow_iso
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -316,6 +317,44 @@ async def test_delete_issue_with_essays_requires_confirm_then_cascades(
     assert (await client.get(f"/api/essays/{essay_id}", headers=auth_headers)).status_code == 404
     assert (await client.get(f"/api/issues/{issue_id}", headers=auth_headers)).status_code == 404
     assert not (data_dir / "photos" / str(issue_id)).exists()
+
+
+async def test_delete_issue_photo_cleanup_failure_still_200(
+    client: AsyncClient,
+    auth_headers: dict[str, str],
+    session_factory: async_sessionmaker[AsyncSession],
+    data_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """DB 级联已提交后磁盘清理失败：不报 500，返回 photos_removed=false。"""
+    student_id = await create_student(session_factory, student_no="S009b", name="王五二")
+    issue_id = (
+        await client.post(
+            "/api/issues",
+            json={"issue_no": 22, "week_start_date": "2026-09-07"},
+            headers=auth_headers,
+        )
+    ).json()["data"]["id"]
+    await client.post(
+        f"/api/issues/{issue_id}/essays",
+        data={"student_id": str(student_id)},
+        files=[("files", ("a.jpg", b"data", "image/jpeg"))],
+        headers=auth_headers,
+    )
+
+    def _boom(path: object, *args: object, **kwargs: object) -> None:
+        raise OSError("disk guard blocked")
+
+    monkeypatch.setattr("app.routers.issues.shutil.rmtree", _boom)
+    ok = await client.delete(
+        f"/api/issues/{issue_id}", params={"confirm": "true"}, headers=auth_headers
+    )
+    assert ok.status_code == 200
+    body = ok.json()
+    assert body["data"]["photos_removed"] is False
+    assert "手动删除" in body["message"]
+    # DB 侧级联已生效
+    assert (await client.get(f"/api/issues/{issue_id}", headers=auth_headers)).status_code == 404
 
 
 async def test_upload_empty_file_returns_400(
