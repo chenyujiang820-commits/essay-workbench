@@ -43,6 +43,58 @@ export function isLowResolution(
   return shortEdge < MIN_SHORT_EDGE || longEdge < MIN_LONG_EDGE;
 }
 
+/**
+ * 后端可接收的图片 MIME（与 backend/app/images.py 的 ALLOWED_CONTENT_TYPES 同源）。
+ */
+export const SUPPORTED_IMAGE_TYPES: readonly string[] = [
+  "image/jpeg",
+  "image/jpg",
+  "image/pjpeg",
+  "image/png",
+  "image/webp",
+  "image/bmp",
+  "image/x-ms-bmp",
+];
+
+/** 后端可接收的文件后缀（与 ALLOWED_EXTENSIONS 同源）。 */
+export const SUPPORTED_IMAGE_EXTENSIONS: readonly string[] = [
+  ".jpg",
+  ".jpeg",
+  ".png",
+  ".webp",
+  ".bmp",
+];
+
+/** 后端白名单提示文案，与 ALLOWED_HINT 保持一致。 */
+export const ACCEPTED_IMAGE_HINT = "jpg / jpeg / png / webp / bmp";
+
+function fileSuffix(name: string): string {
+  const dot = name.lastIndexOf(".");
+  return dot > 0 ? name.slice(dot).toLowerCase() : "";
+}
+
+/**
+ * 这张照片是否有可能被后端接收。
+ *
+ * 判据与后端 resolve_extension 一致：MIME 命中或文件后缀命中，任一即可。
+ * 之所以要在选图当场判：iPhone 原片常是 HEIC，浏览器压不动时 processImage 会降级
+ * 返回「原文件」，老师点「上传并识别」只会收到一句「仅支持 jpg…」的 400，完全不知道
+ * 下一步该做什么（手机端真机验证暴露）。
+ */
+export function isAcceptedImage(file: File): boolean {
+  if (SUPPORTED_IMAGE_TYPES.includes((file.type || "").toLowerCase())) {
+    return true;
+  }
+  return SUPPORTED_IMAGE_EXTENSIONS.includes(fileSuffix(file.name || ""));
+}
+
+/** 挑出后端不收的照片名，供页面就地提示。 */
+export function listRejectedImages(files: File[]): string[] {
+  return files
+    .filter((file) => !isAcceptedImage(file))
+    .map((file) => file.name || "未命名照片");
+}
+
 /** 目标画布尺寸：等比缩放，且仅缩小不放大。 */
 export function targetSize(
   width: number,

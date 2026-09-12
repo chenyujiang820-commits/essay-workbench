@@ -183,4 +183,39 @@ describe("UploadPage", () => {
     // 提醒不阻断：低画质照片照常提交
     expect((api.uploadEssay as ReturnType<typeof vi.fn>).mock.calls[0][2]).toHaveLength(1);
   });
+
+  it("warns about mobile camera formats the backend rejects and skips them", async () => {
+    renderUpload();
+    await screen.findByTestId("photo-input");
+
+    fireEvent.change(screen.getByTestId("photo-input"), {
+      target: {
+        files: [new File([new Uint8Array([1])], "IMG_0007.HEIC", { type: "image/heic" })],
+      },
+    });
+
+    const warning = await screen.findByTestId("format-warning");
+    expect(warning.textContent).toMatch(/IMG_0007\.HEIC/);
+    // 提示必须给可执行的改法，不能只说「格式不支持」
+    expect(warning.textContent).toMatch(/兼容性/);
+    // 被挑出的照片不进入待上传列表：免得提交后才收到看不懂的 400
+    expect(screen.queryByText(/已选 \d+ 张/)).toBeNull();
+  });
+
+  it("keeps the acceptable photos of a mixed mobile batch", async () => {
+    renderUpload();
+    await screen.findByTestId("photo-input");
+
+    fireEvent.change(screen.getByTestId("photo-input"), {
+      target: {
+        files: [
+          new File([new Uint8Array([1])], "IMG_0008.HEIC", { type: "image/heic" }),
+          new File([new Uint8Array([2])], "IMG_0009.jpg", { type: "image/jpeg" }),
+        ],
+      },
+    });
+
+    await screen.findByTestId("format-warning");
+    await waitFor(() => expect(screen.getByText(/已选 1 张/)).toBeTruthy());
+  });
 });

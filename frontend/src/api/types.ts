@@ -123,6 +123,8 @@ export interface BookItem {
   title: string;
   paragraphs: string[];
   is_selected: boolean;
+  /** 该篇尚未定稿、正文取的是识别初稿（仅投屏路径会为真，GAP-14）。 */
+  is_draft?: boolean;
 }
 
 export interface PresentData {
@@ -131,4 +133,8 @@ export interface PresentData {
   week_start_date: string;
   generated_at: string;
   items: BookItem[];
+  /** 未定稿（投屏显示的是识别初稿）的篇数。 */
+  draft_count?: number;
+  /** 既无定稿文字也无识别文字、因而没进轮播的篇数（0/undefined 表示没有排除）。 */
+  excluded_no_text?: number;
 }

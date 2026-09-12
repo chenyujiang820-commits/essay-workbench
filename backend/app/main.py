@@ -73,21 +73,74 @@ def register_exception_handlers(app: FastAPI) -> None:
         return _error_response(500, "服务器内部错误", 500)
 
 
+#: SPA 入口文件名。
+_SPA_ENTRY = "index.html"
+
+#: 入口 HTML 的缓存策略。手机浏览器（iOS Safari / 微信 / Chrome）对**没有**
+#: ``Cache-Control`` 的 HTML 做启发式缓存：重新构建后旧入口仍指向已删除的
+#: ``/assets/index-<hash>.js``，而该请求的 404 会被 SPA 回退成 HTML —— 模块脚本拿到
+#: HTML 后静默失败，页面白屏且没有任何报错。这是"手机端打不开"的根因之一，
+#: 故入口必须每次回源校验。
+_NO_CACHE = "no-cache"
+
+#: 构建产物前缀：这些路径缺失时返回真 404，不回退成 HTML，让加载错误可见可诊断。
+_ASSET_PREFIX = "assets/"
+
+
+def _clean_request_path(path: str) -> str:
+    """规范化挂载点内的相对路径，便于统一做前缀判断。
+
+    starlette 传进来的形状跟平台相关（Windows 上是 ``assets\\\\a.js``，根目录是 ``.``），
+    直接 ``startswith("api/")`` 这类判断在 Windows 上全部落空 —— 于是未知 ``/api/*``
+    会被 SPA 回退成入口 HTML 并返回 200，前端只看到"接口没数据"。这里先把路径收敛成
+    ``a/b`` 形式，再交给各判据。
+    """
+    cleaned = (path or "").replace("\\", "/").lstrip("/")
+    while cleaned.startswith("./"):
+        cleaned = cleaned[2:]
+    return "" if cleaned == "." else cleaned
+
+
+def _is_asset_path(path: str) -> bool:
+    """请求是否指向构建产物目录。"""
+    return _clean_request_path(path).startswith(_ASSET_PREFIX)
+
+
+def _is_entry_path(path: str) -> bool:
+    """请求是否就是 SPA 入口（根路径或 ``index.html``）。"""
+    return _clean_request_path(path) in ("", _SPA_ENTRY)
+
+
 class _SpaStaticFiles(StaticFiles):
-    """SPA 静态托管：未命中的前端深层路由回退到 ``index.html``。
+    """SPA 静态托管：深层路由回退到入口 HTML，入口不缓存、缺失产物不回退。
 
     ``StaticFiles(html=True)`` 只把目录请求映射到 ``index.html``，不会为
     ``/present/1`` 这类前端路由做回退，直接 404。单端口部署（后端托管前端）下
     老师收藏/刷新深层链接会白屏，故对非 ``api/`` 前缀的 404 回退到 SPA 入口。
+
+    两条配套约束（手机端真机验证暴露）：
+    * 直连入口与回退得到的响应都加 ``Cache-Control: no-cache``，避免手机拿着旧入口不放；
+    * ``assets/`` 前缀的 404 不回退，避免"用 HTML 顶替缺失 JS"造成无提示白屏。
     """
 
     async def get_response(self, path: str, scope: Scope) -> Response:
+        request_path = _clean_request_path(path)
+        fell_back = False
         try:
-            return await super().get_response(path, scope)
+            response = await super().get_response(path, scope)
         except StarletteHTTPException as exc:
-            if exc.status_code == 404 and not path.startswith("api/"):
-                return await super().get_response("index.html", scope)
-            raise
+            keep_error = (
+                exc.status_code != 404
+                or request_path.startswith("api/")
+                or _is_asset_path(request_path)
+            )
+            if keep_error:
+                raise
+            response = await super().get_response(_SPA_ENTRY, scope)
+            fell_back = True
+        if fell_back or _is_entry_path(request_path):
+            response.headers["Cache-Control"] = _NO_CACHE
+        return response
 
 
 async def _probe_database(request: Request) -> tuple[bool, int | None]:

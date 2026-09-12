@@ -6,23 +6,32 @@
 标题比留空更伤信任分，因此只在首行足够"像标题"时才返回结果，否则返回空串交给
 老师手填（校对页标题输入框优先级更高：``PATCH`` 显式覆盖，Worker 不写非空标题）。
 
-判定规则（PRD v1.2 rev.2 §5 FR-11）：
+判定规则（PRD v1.2 §5 FR-11，rev.4 起补充真机判据）：
 
-1. 取首个非空行；
-2. 反复剥离包裹符号（书名号/引号/括号/方头括号）、首尾空白与行尾中英文句读；
-3. 句末标点（``。！？.!?``）出现在**行主体内部** -> 该行是正文片段，返回空串。
+1. **显式标签行优先**：开头若干非空行内若有「（作文/习作）题目：X」「标题：X」
+   「题目是 X」（允许前置题号，如「23. 题目：…」），取冒号后的内容判定；
+   冒号后为空则取下一非空行。命中标签行即以此结果为准，不再回退到规则 2。
+2. 否则**只看首个非空行**（不跨行找，避免把正文误当标题）；
+3. 反复剥离包裹符号（书名号/引号/括号/方头括号）、首尾空白与行尾中英文句读；
+4. 句末标点（``。！？.!?``）出现在**行主体内部** -> 该行是正文片段，返回空串。
    只看行尾的单个句末标点仍算标题（如「今天下雨了。」）；
-4. 首行是作文本表头/表单栏目（如「月 日 星期」「姓名 班级」）-> 返回空串，
-   不把表格文字带进整册 PDF；
-5. 清洗后长度 > ``MAX_TITLE_CHARS`` -> 判定为正文，返回空串；
-6. 否则返回截断到 ``MAX_TITLE_CHARS`` 的标题。
+5. 首行是噪声 -> 返回空串。噪声四类：
+   * 作文本表头/表单栏目（「月 日 星期」「姓名 班级」）；
+   * 大题号行（「四、写作」「三、」）；
+   * 题号开头行（「23. …」「第 23 题」）；
+   * 署名/水印行（「逸云手写」「@某某公众号」）。
+6. 清洗后长度 > ``MAX_TITLE_CHARS`` -> 判定为正文，返回空串；
+7. 否则返回截断到 ``MAX_TITLE_CHARS`` 的标题。
 
-规则 3/4 来自真机数据回灌：T05 真实照片里「覆盖和服务更多的人？于是我们便开始了
-四川的」是 OCR 断行的正文残句（只有 1 个句末标点，旧判据统计个数漏掉），
-「月 日 星期」是作文本日期栏（无标点、长度合规，旧判据完全没防御）。
+规则 4/5 的表头部分来自真机 T05 回灌（GAP-11 第一轮）；规则 1 与规则 5 的题号/署名
+部分来自真机第二轮回灌（GAP-11）：
+第二轮回灌：三张真实照片的识别结果首行分别是「逸云手写」（页眉署名）、「四、写作」
+（大题号）和一行正文，旧判据把前两条当成了标题，老师只能两次手填纠正。
 """
 
 from __future__ import annotations
+
+import re
 
 #: 标题最大长度（字符）：超过即判定为首行是正文。
 MAX_TITLE_CHARS = 30
@@ -46,6 +55,30 @@ _FORM_MIN_LABEL_HITS = 2
 
 #: 剥掉栏目词与数字后，允许残留的实义字符数：<=1 即认为整行都是表格文字。
 _FORM_MAX_MEANINGFUL_CHARS = 1
+
+#: 显式标签行：可选题号前缀 + 题目/标题 + 冒号或「是」+ 标题内容（可能为空）。
+_TITLE_LABEL_RE = re.compile(
+    r"^(?:[0-9０-９一二三四五六七八九十]{1,4}\s*[、.．:：]?\s*)?"
+    r"(?:作文|习作)?\s*(?:题\s*目|标\s*题)\s*(?:[：:]|是)\s*(.*)$"
+)
+
+#: 标签行只在开头这么多行里找：再往后就是正文，不值得冒险。
+_LABEL_SCAN_LINES = 5
+
+#: 大题号行：「四、写作」「三、」（中文序号 + 顿号/点）。
+_SECTION_NUMBER_RE = re.compile(r"^[一二三四五六七八九十]+\s*[、.．]")
+
+#: 题号行：「23. 题目…」「23、」（数字 + 顿号/点）。
+_QUESTION_NUMBER_RE = re.compile(r"^[0-9０-９]{1,3}\s*[、.．]")
+
+#: 试卷题头：「第 23 题」「第3篇」。
+_EXAM_QUESTION_RE = re.compile(r"^第\s*[0-9０-９一二三四五六七八九十]{1,4}\s*[题次篇]")
+
+#: 署名/水印行后缀与长度上限（真机「逸云手写」4 字）。
+_SIGNATURE_SUFFIXES: tuple[str, ...] = (
+    "手写", "手记", "录入", "校对", "来源", "摘自", "公众号", "水印", "署名",
+)
+_SIGNATURE_MAX_CHARS = 8
 
 
 def _clean_line(line: str) -> str:
@@ -111,12 +144,68 @@ def _is_form_header_line(line: str) -> bool:
     return meaningful <= _FORM_MAX_MEANINGFUL_CHARS
 
 
-def _first_nonempty_line(text: str) -> str:
-    """返回首个非空白行（已 strip）；全空白时返回空串。"""
-    for line in (text or "").splitlines():
-        if line.strip():
-            return line.strip()
-    return ""
+def _is_numbering_line(line: str) -> bool:
+    """大题号/题号/试卷题头（「四、写作」「23. …」「第 23 题」）不是标题。"""
+    return bool(
+        _SECTION_NUMBER_RE.match(line)
+        or _QUESTION_NUMBER_RE.match(line)
+        or _EXAM_QUESTION_RE.match(line)
+    )
+
+
+def _is_signature_line(line: str) -> bool:
+    """页眉署名与水印行（「逸云手写」「@xxx」）不是标题：短行 + 命中署名后缀。"""
+    text = line.strip()
+    if text.startswith("@"):
+        return True
+    if len(text) > _SIGNATURE_MAX_CHARS:
+        return False
+    return any(text.endswith(suffix) for suffix in _SIGNATURE_SUFFIXES)
+
+
+def _is_noise_line(line: str) -> bool:
+    """四类噪声行的总入口。"""
+    return _is_form_header_line(line) or _is_numbering_line(line) or _is_signature_line(line)
+
+
+def _nonempty_lines(text: str) -> list[str]:
+    """按顺序返回所有非空白行（已 strip）。"""
+    return [line.strip() for line in (text or "").splitlines() if line.strip()]
+
+
+def _judge_line(line: str) -> str:
+    """对一行候选标题文本套用全部判据：可信则返回清洗截断后的标题，否则空串。"""
+    if not line:
+        return ""
+    if _has_mid_sentence_punctuation(line) or _is_noise_line(line):
+        return ""
+    title = _clean_line(line)
+    if not title or len(title) > MAX_TITLE_CHARS:
+        return ""
+    return title[:MAX_TITLE_CHARS]
+
+
+def _extract_labeled_title(lines: list[str]) -> str | None:
+    """在开头若干非空行里找显式「题目：/标题：」标签行。
+
+    真机照片里试卷本就写着「作文题目：《…》」，这是比"猜首行"强得多的信号，因此
+    标签行优先；但**只在标签存在时**才跨行取内容——无标签时跨行找下一行会把
+    ``月 日 星期`` 后面的正文残句抽成标题（真机 T05 既有断言正是这么钉住的）。
+
+    Returns:
+        ``None`` 表示没有标签行（调用方回退到「只看首个非空行」）；
+        否则返回标签内容的判定结果（命中标签行即以它为准，不再回退）。
+    """
+    for position, line in enumerate(lines[:_LABEL_SCAN_LINES]):
+        match = _TITLE_LABEL_RE.match(line)
+        if match is None:
+            continue
+        candidate = match.group(1).strip()
+        if not candidate and position + 1 < len(lines):
+            # 冒号后换行书写：「作文题目：」下一行才是标题。
+            candidate = lines[position + 1]
+        return _judge_line(candidate)
+    return None
 
 
 def extract_title(text: str) -> str:
@@ -126,18 +215,13 @@ def extract_title(text: str) -> str:
         text: 定稿候选文本（各张识别结果按 ``seq`` 顺序拼接）。
 
     Returns:
-        清洗并截断到 30 字的标题；判定"不像标题"时返回 ``""``（由老师填写）。
+        清洗并截断到 30 字的标题；判定"不像标题"时返回 ````（由老师填写）。
     """
-    first_line = _first_nonempty_line(text)
-    if not first_line:
+    lines = _nonempty_lines(text)
+    if not lines:
         return ""
 
-    if _has_mid_sentence_punctuation(first_line):
-        return ""
-    if _is_form_header_line(first_line):
-        return ""
-
-    title = _clean_line(first_line)
-    if not title or len(title) > MAX_TITLE_CHARS:
-        return ""
-    return title[:MAX_TITLE_CHARS]
+    labeled = _extract_labeled_title(lines)
+    if labeled is not None:
+        return labeled
+    return _judge_line(lines[0])

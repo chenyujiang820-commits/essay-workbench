@@ -424,4 +424,75 @@ describe("ProofreadPage", () => {
     // 折叠状态与已查看集合都不落 localStorage（每次进入复位）。
     expect(window.localStorage.length).toBe(0);
   });
+
+  // ---------------------------------------------------------------------- F3
+  // 高置信稿（真机最常见）：全篇没有 diff，面板改走「识别原文对照」，
+  // 但绝不因此触发 FR-09 的定稿前确认框。
+  const noDiffPhotos = [
+    photoWith(1, null, "春天来了。"),
+    photoWith(2, null, "三圈了，之后【?】胡老师他们跑完了"),
+  ];
+
+  it("无 diff 时面板改渲染识别原文对照，而不是空壳提示", async () => {
+    renderEssay({ photos: noDiffPhotos, low_confidence: 0 });
+    await screen.findByTestId("final-text");
+
+    expect(screen.getByTestId("ocr-compare").textContent).toContain("三圈了，之后");
+    expect(screen.queryByText(/暂无 diff 数据/)).toBeNull();
+    expect(suspectKeys()).toEqual(["2:ocr:0"]);
+    expect(screen.getByTestId("suspect-counter").textContent).toContain("存疑 1 处");
+  });
+
+  it("点识别原文标注可定位原片，且 fallback 存疑点不触发定稿确认框", async () => {
+    renderEssay({ photos: noDiffPhotos, low_confidence: 0 });
+    await screen.findByTestId("final-text");
+
+    const secondTab = screen.getByRole("button", { name: "第 2 张" });
+    expect(secondTab.className).not.toContain("bg-slate-900");
+    const mark = document.querySelector<HTMLElement>('[data-suspect-key="2:ocr:0"]');
+    expect(mark).toBeTruthy();
+    fireEvent.click(mark as HTMLElement);
+    await waitFor(() => expect(secondTab.className).toContain("bg-slate-900"));
+
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+    fireEvent.click(screen.getByRole("button", { name: "保存并定稿" }));
+    expect(confirmSpy).not.toHaveBeenCalled();
+    await waitFor(() => expect(api.updateEssay).toHaveBeenCalled());
+    confirmSpy.mockRestore();
+  });
+
+  // ---------------------------------------------------------------------- GAP-12
+  // 真机反馈「手机端点开文章，识别对照看不见」：根因不在数据，而在版式 ——
+  // 默认停在「原片」页 + 整页不可滚。故页签默认值、计数、跨页跳转都要有测试锁住。
+  it("默认停在「文字」页，页签带存疑数，老师第一眼就能看到识别对照", async () => {
+    renderEssay({ photos: noDiffPhotos, low_confidence: 0 });
+    await screen.findByTestId("final-text");
+
+    expect(screen.getByTestId("pane-text").getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByTestId("pane-photo").getAttribute("aria-pressed")).toBe("false");
+    expect(screen.getByTestId("pane-text").textContent).toContain("存疑 1");
+  });
+
+  it("点存疑处会连页签一起切到原片：手机端原片在另一个页签，只改 seq 等于没反应", async () => {
+    renderEssay({ photos: noDiffPhotos, low_confidence: 0 });
+    await screen.findByTestId("final-text");
+
+    const mark = document.querySelector<HTMLElement>('[data-suspect-key="2:ocr:0"]');
+    expect(mark).toBeTruthy();
+    fireEvent.click(mark as HTMLElement);
+    await waitFor(() =>
+      expect(screen.getByTestId("pane-photo").getAttribute("aria-pressed")).toBe("true"),
+    );
+    expect(screen.getByTestId("pane-text").getAttribute("aria-pressed")).toBe("false");
+    // 定位到的那张原片同时高亮。
+    expect(screen.getByRole("button", { name: "第 2 张" }).className).toContain("bg-slate-900");
+  });
+
+  it("全篇无存疑时页签只剩「文字」，面板给出一致结论而不是空壳", async () => {
+    renderEssay({ photos: [photoWith(1, null, "春天来了。")], low_confidence: 0 });
+    await screen.findByTestId("ocr-compare-clean");
+
+    expect(screen.getByTestId("pane-text").textContent).toBe("文字");
+    expect(screen.getByTestId("ocr-compare-clean").textContent).toContain("未发现存疑字");
+  });
 });

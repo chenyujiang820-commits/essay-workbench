@@ -137,7 +137,7 @@ async def present_data(
     """投屏数据：逐篇 name/title/paragraphs（供横版大字号讲评视图）。
 
     Raises:
-        ApiError: 400 该期暂无作文；404 期数不存在。
+        ApiError: 400 该期暂无作文 / 暂无可投屏文字；404 期数不存在。
     """
     settings: AppSettings = request.app.state.settings
     issue = await _load_issue(session, issue_id)
@@ -145,14 +145,33 @@ async def present_data(
     if not essays:
         raise ApiError("该期暂无作文，无法投屏", code=400, status_code=400)
 
+    # 投屏列**全部有文字的**稿件（GAP-14）：上一轮只列 status=proofread，于是「拍完 3 篇、
+    # 只定稿了 1 篇」时投屏里只剩那 1 篇，老师的原话是「只能看到一篇文章，另外一篇看不到」。
+    # 未定稿的用识别初稿顶上并标 is_draft，让老师知道黑板上现在讲的是没定稿的稿子。
+    bodies = [(essay, *tpl.present_body(essay)) for essay in essays]
+    screenable = [(essay, text, draft) for essay, text, draft in bodies if text]
+    excluded = len(essays) - len(screenable)
+    if not screenable:
+        raise ApiError(
+            "该期暂无可投屏的作文（既无定稿文字也无识别文字），请先完成拍照识别或校对",
+            code=400,
+            status_code=400,
+        )
+
     order_key = tpl.resolve_order(order)
-    ordered = tpl.sort_essays(essays, order_key)
+    ordered = tpl.sort_essays([essay for essay, _, _ in screenable], order_key)
+    draft_count = sum(1 for _, _, draft in screenable if draft)
     payload = PresentOut(
         class_name=tpl.class_name_from_settings(settings),
         issue_no=issue.issue_no,
         week_start_date=issue.week_start_date,
         generated_at=datetime.now().strftime("%Y-%m-%d %H:%M"),
-        items=[BookItemOut(**item) for item in tpl.build_items(ordered)],
+        items=[
+            BookItemOut(**item)
+            for item in tpl.build_items(ordered, include_draft_fallback=True)
+        ],
+        excluded_no_text=excluded,
+        draft_count=draft_count,
     )
     return envelope(payload.model_dump())
 

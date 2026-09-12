@@ -14,7 +14,11 @@ import { useBlocker, useNavigate, useParams } from "react-router-dom";
 
 import { ApiError, api } from "../api/client";
 import type { EssayDetail, Photo } from "../api/types";
-import DiffText, { composeInitialText, listSuspectKeys } from "../components/DiffText";
+import DiffText, {
+  composeInitialText,
+  listActiveSuspectKeys,
+  listSuspectKeys,
+} from "../components/DiffText";
 import PhotoViewer from "../components/PhotoViewer";
 
 const EMPTY_PHOTOS: Photo[] = [];
@@ -152,7 +156,9 @@ export default function ProofreadPage() {
   const [title, setTitle] = useState("");
   const [initialTitle, setInitialTitle] = useState("");
   const [activeSeq, setActiveSeq] = useState(1);
-  const [pane, setPane] = useState<PaneKey>("photo");
+  // 移动端默认落在「文字」页：定稿文字与识别对照都在这里，老师点开文章第一眼就能看到；
+  // 桌面端两栏同时可见，此默认值不影响桌面。原片点一下页签即可切回（GAP-12）。
+  const [pane, setPane] = useState<PaneKey>("text");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -198,6 +204,19 @@ export default function ProofreadPage() {
     () => photos.find((photo) => photo.seq === activeSeq) ?? photos[0] ?? null,
     [photos, activeSeq],
   );
+
+  // 页签上的「存疑 N」与面板徽标同源（listActiveSuspectKeys）：移动端否则没人知道
+  // 「文字」页里还有一张识别对照表要看的（GAP-12 真机反馈）。
+  const compareCount = useMemo(
+    () => listActiveSuspectKeys(photos, value).length,
+    [photos, value],
+  );
+
+  /** 点存疑处 = 要看原片：移动端原片在另一个页签，必须连页签一起切过去才看得见。 */
+  const focusPhoto = useCallback((seq: number) => {
+    setActiveSeq(seq);
+    setPane("photo");
+  }, []);
 
   // 标题是一等字段（FR-11）：改标题未保存同样算「脏」。
   const dirty = value !== initialText || title !== initialTitle;
@@ -319,7 +338,7 @@ export default function ProofreadPage() {
   }
 
   return (
-    <main className="mx-auto flex h-dvh max-w-7xl flex-col px-3 py-4 sm:px-4">
+    <main className="mx-auto flex min-h-dvh max-w-7xl flex-col px-3 py-4 sm:px-4 lg:h-dvh">
       <header className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2">
           <div className="flex shrink-0 items-center gap-2">
@@ -405,8 +424,14 @@ export default function ProofreadPage() {
 
       {failed ? null : (
         <Notice tone="hint">
-          左侧为原片（可缩放），右侧上方填写标题与定稿文字，下方「识别对照」黄色为引擎存疑处；
-          逐个点看存疑处可标记「已查看」并定位对应原片。核对后点击「保存并定稿」。
+          <span className="hidden lg:inline">
+            左侧为原片（可缩放），右侧上方填写标题与定稿文字，下方「识别对照」黄色为引擎存疑处；
+            逐个点看存疑处可标记「已查看」并定位对应原片。核对后点击「保存并定稿」。
+          </span>
+          <span className="lg:hidden">
+            当前是「文字」页：上方改定稿，下面「识别对照」标出未识别字（橙色）与被改动句（红色），
+            点任意标注会跳到对应原片核对。核对完点「保存并定稿」。
+          </span>
         </Notice>
       )}
 
@@ -423,17 +448,21 @@ export default function ProofreadPage() {
           <button
             key={key}
             type="button"
+            data-testid={"pane-" + key}
+            aria-pressed={pane === key}
             onClick={() => setPane(key)}
             className={`flex-1 rounded-md px-3 py-2 text-sm ${
               pane === key ? "bg-slate-900 text-white" : "border border-slate-300 text-slate-700"
             }`}
           >
-            {label}
+            {key === "text" && compareCount > 0 ? label + " · 存疑 " + compareCount : label}
           </button>
         ))}
       </div>
 
-      <div className="mt-3 grid min-h-0 flex-1 gap-4 lg:grid-cols-2">
+      {/* 手机端定稿框 + 识别对照远超一屏：整页滚动（见 styles.css 高度放开）才读得完；
+          桌面端仍保持「一屏不滚」的工作台布局（GAP-12 真机反馈）。 */}
+      <div className="mt-3 grid flex-1 gap-4 lg:min-h-0 lg:grid-cols-2 lg:overflow-hidden">
         <section className={`min-h-0 flex-col ${pane === "photo" ? "flex" : "hidden"} lg:flex`}>
           {photos.length > 1 ? (
             <div className="mb-2 flex flex-wrap gap-1">
@@ -453,7 +482,8 @@ export default function ProofreadPage() {
               ))}
             </div>
           ) : null}
-          <div className="min-h-[240px] flex-1">
+          {/* 手机端给原片确定高度：PhotoViewer 内部是 h-full，父级无确定高度时缩放层会塌成 0。 */}
+          <div className="min-h-[240px] flex-1 max-lg:h-[52vh] max-lg:flex-none">
             <PhotoViewer
               url={activePhoto ? photoUrls[activePhoto.id] ?? null : null}
               seq={activePhoto?.seq ?? 1}
@@ -467,7 +497,7 @@ export default function ProofreadPage() {
             photos={photos}
             value={value}
             onChange={setValue}
-            onSelectPhoto={setActiveSeq}
+            onSelectPhoto={focusPhoto}
             viewedSuspects={review.viewedSuspects}
             onSuspectView={review.markViewed}
             disabled={saving}

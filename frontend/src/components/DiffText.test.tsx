@@ -3,9 +3,12 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { DiffSegment, Photo } from "../api/types";
 import DiffText, {
+  buildOcrCompare,
   composeInitialText,
   describeSegment,
+  listFallbackSuspectKeys,
   listSuspectKeys,
+  ocrSuspectKey,
   splitSentences,
   suspectKey,
 } from "./DiffText";
@@ -246,5 +249,223 @@ describe("句级切分（OPT-01 句级跳转）", () => {
     fireEvent.click(suspectSpan("2:0:1"));
     expect(onSuspectView).toHaveBeenCalledWith("2:0:1");
     expect(screen.getByTestId("suspect-counter").textContent).toBe("存疑 2 处 · 已查看 0 处");
+  });
+});
+
+describe("识别原文对照（全篇无 diff 时的 fallback 模式）", () => {
+  /** 取 fallback 存疑单元：与既有 diff 存疑处共用 data-suspect-key 选择器。 */
+  function ocrSpan(key: string): HTMLElement {
+    const span = document.querySelector<HTMLElement>(`[data-suspect-key="${key}"]`);
+    expect(span).toBeTruthy();
+    return span as HTMLElement;
+  }
+
+  it("渲染识别原文对照，而不是「暂无 diff 数据」空壳", () => {
+    const photos = [photo(1, null, "三圈了，之后【?】胡老师他们跑完了")];
+    render(
+      <DiffText photos={photos} value="三圈了，之后胡老师他们跑完了" onChange={() => undefined} />,
+    );
+
+    const box = screen.getByTestId("ocr-compare");
+    expect(box.textContent).toContain("三圈了，之后");
+    expect(box.textContent).toContain("胡老师他们跑完了");
+    expect(box.textContent).not.toContain("暂无 diff 数据");
+    expect(screen.getByTestId("diff-annotated").contains(box)).toBe(true);
+  });
+
+  it("按照片 seq 取原文，engine1_text 为空的照片跳过", () => {
+    const photos = [
+      photo(3, null, null),
+      photo(1, null, "第一张的原文。"),
+      photo(2, [], "第二张的原文。"),
+    ];
+    render(<DiffText photos={photos} value="" onChange={() => undefined} />);
+
+    expect(screen.queryByTestId("ocr-line-3")).toBeNull();
+    const lines = screen.getAllByTestId(/ocr-line-/);
+    expect(lines.map((line) => line.getAttribute("data-testid"))).toEqual([
+      "ocr-line-1",
+      "ocr-line-2",
+    ]);
+    expect(ocrSuspectKey(1, 0)).toBe("1:ocr:0");
+  });
+
+  it("未识别占位符标成「未识别」存疑单元，点击定位原片", () => {
+    const onSelectPhoto = vi.fn();
+    const onSuspectView = vi.fn();
+    const photos = [photo(1, null, "三圈了，之后【?】胡老师他们跑完了")];
+    render(
+      <DiffText
+        photos={photos}
+        value="三圈了，之后胡老师他们跑完了"
+        onChange={() => undefined}
+        onSelectPhoto={onSelectPhoto}
+        onSuspectView={onSuspectView}
+      />,
+    );
+
+    const mark = ocrSpan("1:ocr:0");
+    expect(mark.textContent).toBe("【?】");
+    expect(mark.getAttribute("data-suspect")).toBe("ocr-unknown");
+    expect(mark.getAttribute("data-photo-seq")).toBe("1");
+    expect(mark.getAttribute("title")).toContain("未能识别");
+    expect(mark.className).toContain("text-amber-800");
+    expect(mark.className).not.toContain("diff-suspect");
+
+    fireEvent.click(mark);
+    expect(onSelectPhoto).toHaveBeenCalledWith(1);
+    expect(onSuspectView).toHaveBeenCalledWith("1:ocr:0");
+    expect(screen.getByTestId("suspect-counter").textContent).toBe("存疑 1 处 · 已查看 0 处");
+  });
+
+  it("回车与点击等价，已查看后保留可点击的描边态", () => {
+    const onSelectPhoto = vi.fn();
+    const photos = [photo(2, null, "他【?】说你好。")];
+    render(
+      <DiffText
+        photos={photos}
+        value="他说你好。"
+        onChange={() => undefined}
+        onSelectPhoto={onSelectPhoto}
+        viewedSuspects={new Set(["2:ocr:0"])}
+      />,
+    );
+
+    const mark = ocrSpan("2:ocr:0");
+    expect(mark.getAttribute("data-viewed")).toBe("1");
+    expect(mark.className).toContain("ring-1");
+    expect(mark.getAttribute("title")).toContain("已查看");
+    fireEvent.keyDown(mark, { key: "Enter" });
+    expect(onSelectPhoto).toHaveBeenCalledWith(2);
+    expect(screen.getByTestId("suspect-counter").textContent).toBe("存疑 1 处 · 已查看 1 处");
+  });
+
+  it("覆盖 ? ？ □ ▯ 【?】 等未识别写法", () => {
+    const text = "一?二。三？四。五□六。七▯八。九【?】十。";
+    const photos = [photo(1, null, text)];
+    const unknowns = buildOcrCompare(photos, text)
+      .flatMap((line) => line.parts)
+      .filter((part) => part.kind === "unknown")
+      .map((part) => part.text);
+    expect(unknowns).toEqual(["?", "？", "□", "▯", "【?】"]);
+    expect(listFallbackSuspectKeys(photos, text)).toEqual(["1:ocr:0", "1:ocr:1", "1:ocr:2", "1:ocr:3", "1:ocr:4"]);
+
+    // 〔?〕在断句后括号会被分到下一句，但其中的 ? 仍然要标出来。
+    const bracket = [photo(1, null, "他说〔?〕好了。")];
+    expect(listFallbackSuspectKeys(bracket, "他说〔?〕好了。").length).toBe(1);
+  });
+
+  it("老师从定稿里删掉的句子标成「已修改/删减」", () => {
+    const photos = [photo(1, null, "春天来了。校园也热闹了！")];
+    render(<DiffText photos={photos} value="春天来了。" onChange={() => undefined} />);
+
+    const changed = ocrSpan("1:ocr:0");
+    expect(changed.textContent).toBe("校园也热闹了！");
+    expect(changed.getAttribute("data-suspect")).toBe("ocr-changed");
+    expect(changed.getAttribute("title")).toContain("定稿");
+    expect(changed.className).toContain("text-rose-700");
+    expect(screen.getByTestId("ocr-compare").textContent).toContain("春天来了。");
+  });
+
+  it("比对忽略空白差异；纯标点碎句不算改动句", () => {
+    expect(listFallbackSuspectKeys([photo(1, null, "春天 来了。校园\t也热闹了！")], "春天来了。校园也热闹了！")).toEqual([]);
+    // 「。」这类断句碎块只含标点，不该因为不在定稿里就被标红；
+    // 含未识别字的句子只标占位符本身，真正被改动的句子另算一个点，两者不重复计数。
+    const fragmentPhoto = [photo(1, null, "春天【?】。校园很美丽！")];
+    expect(buildOcrCompare(fragmentPhoto, "春天。")[0].parts.map((part) => [part.text, part.kind])).toEqual([
+      ["春天", null],
+      ["【?】", "unknown"],
+      ["。", null],
+      ["校园很美丽！", "changed"],
+    ]);
+    expect(listFallbackSuspectKeys(fragmentPhoto, "春天。")).toEqual(["1:ocr:0", "1:ocr:1"]);
+  });
+
+  it("整篇一致时只给一行轻量说明，徽标显示无存疑", () => {
+    const photos = [photo(1, null, "春天来了。校园也热闹了！")];
+    render(<DiffText photos={photos} value="春天来了。校园也热闹了！" onChange={() => undefined} />);
+
+    expect(screen.getByTestId("ocr-compare-clean").textContent).toContain("识别原文与定稿一致");
+    expect(screen.queryByTestId("ocr-compare")).toBeNull();
+    expect(document.querySelectorAll("[data-suspect-key]").length).toBe(0);
+    expect(screen.getByTestId("suspect-counter").textContent).toBe("无存疑");
+  });
+
+  it("既无原文也无 diff 时仍给一行提示，不画空框", () => {
+    render(<DiffText photos={[photo(1, null, null)]} value="" onChange={() => undefined} />);
+
+    expect(screen.getByTestId("diff-annotated").textContent).toContain("暂无 diff 数据");
+    expect(screen.queryByTestId("ocr-compare")).toBeNull();
+    expect(screen.queryByTestId("ocr-compare-clean")).toBeNull();
+  });
+
+  it("徽标 N 与 listFallbackSuspectKeys 同源", () => {
+    const photos = [
+      photo(1, null, "春天【?】。校园很美丽！"),
+      photo(2, null, "我们一起跑步。"),
+    ];
+    const value = "春天。校园很美！";
+    const expected = listFallbackSuspectKeys(photos, value);
+    render(<DiffText photos={photos} value={value} onChange={() => undefined} />);
+
+    expect(expected).toEqual(["1:ocr:0", "1:ocr:1", "2:ocr:0"]);
+    expect(Array.from(document.querySelectorAll<HTMLElement>("[data-suspect-key]")).map((node) => node.dataset.suspectKey)).toEqual(expected);
+    expect(screen.getByTestId("suspect-counter").textContent).toBe(`存疑 ${expected.length} 处 · 已查看 0 处`);
+  });
+
+  it("fallback 不进入 listSuspectKeys（定稿前确认框口径不变）", () => {
+    const photos = [
+      photo(1, null, "春天【?】。校园很美丽！"),
+      photo(2, null, "我们一起跑步。"),
+    ];
+    expect(listSuspectKeys(photos)).toEqual([]);
+    const keys = listFallbackSuspectKeys(photos, "");
+    expect(keys.length).toBeGreaterThan(0);
+    for (const key of keys) {
+      expect(key).toMatch(/:ocr:\d+$/);
+      expect(suspectKey(1, 0)).not.toBe(key);
+    }
+    // 有 diff 时仍走 diff 路径，fallback 完全不参与计数。
+    expect(listSuspectKeys([photo(1, [{ type: "replace", text_a: "校园", text_b: "学校" }], "校园")])).toEqual(["1:0"]);
+  });
+
+  // ------------------------------------------------- GAP-13（真机反馈：框画得太大、太乱）
+  // 真机 essay 1 原样：三行页眉后面紧跟一个跨行的长句，中间没有句号。
+  // 只按句末标点切会把「页眉 + 长句」并成一个单元，老师删掉页眉后整句被连坐标红。
+  const realHeaderPhoto = [
+    photo(
+      1,
+      null,
+      "逸云手写\n“致最美逆行者”\n作文题目：《岂曰无衣，与子同袍》\n在2020年的年初，一场疫情席卷了神州大地，\n病毒肆虐横行，掩盖了新桃符的浓浓年味，\n蚕食了春日里的盎然生机。\n逸云手写",
+    ),
+  ];
+  const realHeaderFinal =
+    "在2020年的年初，一场疫情席卷了神州大地，\n病毒肆虐横行，掩盖了新桃符的浓浓年味，\n蚕食了春日里的盎然生机。";
+
+  it("页眉与正文长句不再并成一个框：每个框只覆盖一行", () => {
+    const parts = buildOcrCompare(realHeaderPhoto, realHeaderFinal)
+      .flatMap((line) => line.parts)
+      .filter((part) => part.key !== null);
+
+    expect(parts.map((part) => part.text)).toEqual([
+      "逸云手写",
+      "“致最美逆行者”",
+      "作文题目：《岂曰无衣，与子同袍》",
+      "逸云手写",
+    ]);
+    expect(parts.every((part) => part.kind === "changed")).toBe(true);
+    expect(listFallbackSuspectKeys(realHeaderPhoto, realHeaderFinal)).toEqual([
+      "1:ocr:0",
+      "1:ocr:1",
+      "1:ocr:2",
+      "1:ocr:3",
+    ]);
+  });
+
+  it("按行切之后行分隔符仍在，原文不会糊成一整段", () => {
+    const parts = buildOcrCompare(realHeaderPhoto, realHeaderFinal).flatMap((line) => line.parts);
+
+    expect(parts.filter((part) => part.text === "\n")).toHaveLength(6);
+    expect(parts.map((part) => part.text).join("")).toContain("蚕食了春日里的盎然生机。");
   });
 });

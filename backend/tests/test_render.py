@@ -9,10 +9,11 @@ from __future__ import annotations
 
 import asyncio
 import sys
+from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
-from app.models import Essay, Student, utcnow_iso
+from app.models import Essay, Photo, Student, utcnow_iso
 from app.render import templates as tpl
 from app.schemas import ApiError
 from httpx import AsyncClient
@@ -34,6 +35,8 @@ def make_essay(
     text: str = "第一段文字\n第二段文字",
     selected: int = 0,
     comment: str | None = None,
+    photos: Sequence[str] | None = None,
+    status: str = "proofread",
 ) -> Essay:
     """构造带学生的轻量作文实例（无需数据库）。"""
     student = Student(student_no=student_no, name=name, active=1, created_at=utcnow_iso())
@@ -42,12 +45,23 @@ def make_essay(
         student_id=1,
         title=title,
         final_text=text,
-        status="proofread",
+        status=status,
         low_confidence=0,
         selected=selected,
         teacher_comment=comment,
         created_at=utcnow_iso(),
     )
+    if photos:
+        essay.photos = [
+            Photo(
+                essay_id=1,
+                seq=seq,
+                file_path=f"photos/{seq}.jpg",
+                engine1_text=text,
+                created_at=utcnow_iso(),
+            )
+            for seq, text in enumerate(photos, start=1)
+        ]
     essay.student = student
     return essay
 
@@ -155,7 +169,11 @@ def test_build_items_carries_comment(template: str) -> None:
         "paragraphs",
         "is_selected",
         "comment",
+        # rev.4 投屏改造新增 is_draft；本断言仍守住「不多不少」的键集合。
+        "is_draft",
     }
+    # 默认路径（成册/预览）绝不把未定稿稿件的识别初稿混进来。
+    assert [item["is_draft"] for item in items] == [False, False]
 
 
 @pytest.mark.parametrize("template", TEMPLATES_ALL)
@@ -267,6 +285,50 @@ def test_toc_shows_book_fields(template: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# 投屏正文取法（GAP-14）
+# ---------------------------------------------------------------------------
+def test_present_body_prefers_final_text() -> None:
+    """已定稿稿件取 ``final_text``，不标初稿。"""
+    essay = make_essay(text="定稿文字", photos=["识别文字"])
+    assert tpl.present_body(essay) == ("定稿文字", False)
+
+
+def test_present_body_falls_back_to_recognition_draft() -> None:
+    """未定稿但有识别文字 → 回退识别初稿并标 ``is_draft``（投屏不再静默丢篇）。"""
+    essay = make_essay(text="", photos=["识别第一段"], status="review")
+    assert tpl.present_body(essay) == ("识别第一段", True)
+
+
+def test_present_body_empty_without_any_text() -> None:
+    """定稿与识别文字都为空 → 空串且不标初稿，由调用方排除并计数。"""
+    assert tpl.present_body(make_essay(text="")) == ("", False)
+
+
+def test_recognition_draft_joins_photos_by_seq() -> None:
+    """多张照片按 ``seq`` 升序拼接，空白文字跳过，段之间空行分隔。"""
+    essay = make_essay(text="")
+    essay.photos = [
+        Photo(essay_id=1, seq=2, file_path="photos/2.jpg", engine1_text="第二页", created_at=utcnow_iso()),
+        Photo(
+            essay_id=1, seq=1, file_path="photos/1.jpg", engine1_text="第一页\n还有第二行", created_at=utcnow_iso()
+        ),
+        Photo(essay_id=1, seq=3, file_path="photos/3.jpg", engine1_text="   ", created_at=utcnow_iso()),
+    ]
+    assert tpl.recognition_draft(essay) == "第一页\n还有第二行\n\n第二页"
+
+
+def test_build_items_draft_fallback_is_opt_in() -> None:
+    """``include_draft_fallback`` 默认关闭：成册/预览绝不混入识别初稿（校对铁律）。"""
+    essay = make_essay(text="", photos=["识别初稿"], status="review")
+    strict = tpl.build_items([essay])
+    assert strict[0]["paragraphs"] == []
+    assert strict[0]["is_draft"] is False
+    loose = tpl.build_items([essay], include_draft_fallback=True)
+    assert loose[0]["paragraphs"] == ["识别初稿"]
+    assert loose[0]["is_draft"] is True
+
+
+# ---------------------------------------------------------------------------
 # 路由辅助
 # ---------------------------------------------------------------------------
 async def insert_student(
@@ -307,6 +369,28 @@ async def insert_essay(
         await session.commit()
         await session.refresh(essay)
         return essay.id
+
+
+async def insert_photo(
+    session_factory: async_sessionmaker[AsyncSession],
+    *,
+    essay_id: int,
+    seq: int,
+    engine1_text: str,
+) -> int:
+    """给作文挂一张带识别文字的照片（GAP-14：未定稿投屏要能回退到识别初稿）。"""
+    async with session_factory() as session:
+        photo = Photo(
+            essay_id=essay_id,
+            seq=seq,
+            file_path=f"photos/{essay_id}_{seq}.jpg",
+            engine1_text=engine1_text,
+            created_at=utcnow_iso(),
+        )
+        session.add(photo)
+        await session.commit()
+        await session.refresh(photo)
+        return photo.id
 
 
 async def create_issue(client: AsyncClient, auth_headers: dict[str, str], issue_no: int) -> int:
@@ -412,6 +496,85 @@ async def test_present_data(
     assert len(data["items"]) == 2
     assert data["items"][0]["name"] == "张三"
     assert data["items"][0]["paragraphs"] == ["春天来了。", "玉兰花开了。"]
+
+async def test_present_includes_unproofread_draft(
+    client: AsyncClient,
+    auth_headers: dict[str, str],
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """投屏列出全部有文字的稿件（GAP-14）。
+
+    真机反馈：老师拍完 3 篇只定稿 1 篇，投屏里就只剩那 1 篇，原话是「只能看到一篇文章，
+    另外一篇看不到」。旧实现按 status=proofread 过滤，把未定稿的静默丢弃了。
+    现在的判据改成「有没有文字」：未定稿的用识别初稿顶上并标 is_draft。
+    """
+    issue_id = await create_issue(client, auth_headers, 8)
+    student_a = await insert_student(session_factory, "S001", "张三")
+    student_b = await insert_student(session_factory, "S002", "李四")
+    student_c = await insert_student(session_factory, "S003", "王五")
+    await insert_essay(
+        session_factory,
+        issue_id=issue_id,
+        student_id=student_a,
+        title="春天",
+        text="定稿的一段。",
+    )
+    draft = await insert_essay(
+        session_factory,
+        issue_id=issue_id,
+        student_id=student_b,
+        title="秋天",
+        text="",
+        status="review",
+    )
+    await insert_photo(session_factory, essay_id=draft, seq=1, engine1_text="秋风吹起来了。")
+    await insert_essay(
+        session_factory,
+        issue_id=issue_id,
+        student_id=student_c,
+        title="冬天",
+        text="",
+        status="review",
+    )
+
+    response = await client.get(f"/api/exports/{issue_id}/present", headers=auth_headers)
+    assert response.status_code == 200
+    data = response.json()["data"]
+    # 学号序：张三（定稿）→ 李四（识别初稿）；王五既无定稿也无识别文字 → 排除并计数
+    assert [item["name"] for item in data["items"]] == ["张三", "李四"]
+    assert [item["is_draft"] for item in data["items"]] == [False, True]
+    assert data["items"][1]["paragraphs"] == ["秋风吹起来了。"]
+    assert data["draft_count"] == 1
+    assert data["excluded_no_text"] == 1
+    # 校对铁律不受影响：同一期整册导出仍然 409
+    blocked = await client.post(
+        f"/api/exports/{issue_id}",
+        json={"template": "elegant", "order": "student_no"},
+        headers=auth_headers,
+    )
+    assert blocked.status_code == 409
+
+
+async def test_present_rejects_when_no_text_at_all(
+    client: AsyncClient,
+    auth_headers: dict[str, str],
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """全期都没有文字时返回 400 并说明原因，不给老师一个空轮播（GAP-14）。"""
+    issue_id = await create_issue(client, auth_headers, 9)
+    student_id = await insert_student(session_factory, "S001", "张三")
+    await insert_essay(
+        session_factory,
+        issue_id=issue_id,
+        student_id=student_id,
+        text="",
+        status="review",
+    )
+
+    response = await client.get(f"/api/exports/{issue_id}/present", headers=auth_headers)
+    assert response.status_code == 400
+    assert "暂无可投屏" in response.json()["message"]
+
 
 
 async def test_preview_empty_issue_returns_400(

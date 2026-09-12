@@ -13,7 +13,10 @@ export interface PhotoViewerProps {
 
 export default function PhotoViewer({ url, seq, lowResolution = false }: PhotoViewerProps) {
   return (
-    <div className="relative h-full min-h-[240px] w-full overflow-hidden rounded-lg border border-slate-200 bg-slate-100">
+    <div
+      data-testid="photo-viewer"
+      className="relative h-full min-h-[240px] w-full overflow-hidden rounded-lg border border-slate-200 bg-slate-100"
+    >
       {lowResolution ? (
         <p
           data-testid="photo-low-resolution"

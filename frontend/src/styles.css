@@ -12,6 +12,18 @@ body,
   height: 100%;
 }
 
+/* 手机端（< lg）让文档自然长高、整页滚动：桌面工作台用 h-dvh 固定视口很合适，
+   但 390x844 放不下「定稿文字 + 识别对照」，固定高度会把识别对照顶到屏幕外，
+   既看不见也滚不到 —— 真机反馈「识别对照没有触发」的真实成因。 */
+@media (max-width: 1023.98px) {
+  html,
+  body,
+  #root {
+    height: auto;
+    min-height: 100%;
+  }
+}
+
 body {
   @apply bg-slate-50 text-slate-900 antialiased;
 }

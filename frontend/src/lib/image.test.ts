@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vitest";
 
-import { compressImage, isLowResolution, MIN_LONG_EDGE, MIN_SHORT_EDGE, targetSize } from "./image";
+import {
+  ACCEPTED_IMAGE_HINT,
+  compressImage,
+  isAcceptedImage,
+  isLowResolution,
+  listRejectedImages,
+  MIN_LONG_EDGE,
+  MIN_SHORT_EDGE,
+  targetSize,
+} from "./image";
 
 describe("targetSize", () => {
   it("scales the longest edge down to the cap", () => {
@@ -59,5 +68,34 @@ describe("isLowResolution", () => {
   it("exposes the same thresholds as the PRD (800x600)", () => {
     expect(MIN_SHORT_EDGE).toBe(600);
     expect(MIN_LONG_EDGE).toBe(800);
+  });
+});
+
+describe("isAcceptedImage", () => {
+  // 判据必须与后端 app/images.py::resolve_extension 一致：MIME 或后缀任一命中
+  const cases: Array<[string, string, boolean]> = [
+    ["image/jpeg", "IMG_0001.JPG", true],
+    ["image/heic", "IMG_0002.HEIC", false],
+    ["image/heif", "IMG_0003.HEIF", false],
+    ["image/png", "scan.png", true],
+    ["image/webp", "shot.webp", true],
+    ["", "photo.jpg", true], // MIME 缺失时后缀兜底
+    ["image/heic", "photo.jpg", true], // 后缀兜底：与后端同源，不误伤
+    ["", "IMG_0004.HEIC", false],
+    ["application/pdf", "note.pdf", false],
+  ];
+
+  it.each(cases)("%s + %s -> %s", (type, name, expected) => {
+    expect(isAcceptedImage(new File([new Uint8Array([1])], name, { type }))).toBe(expected);
+  });
+
+  it("lists only the rejected names so the page can quote them", () => {
+    const good = new File([new Uint8Array([1])], "a.jpg", { type: "image/jpeg" });
+    const bad = new File([new Uint8Array([1])], "IMG_9.HEIC", { type: "image/heic" });
+    expect(listRejectedImages([good, bad])).toEqual(["IMG_9.HEIC"]);
+  });
+
+  it("keeps the hint identical to the backend whitelist", () => {
+    expect(ACCEPTED_IMAGE_HINT).toBe("jpg / jpeg / png / webp / bmp");
   });
 });

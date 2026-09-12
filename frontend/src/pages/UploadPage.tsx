@@ -13,7 +13,12 @@ import { useNavigate, useParams } from "react-router-dom";
 import { ApiError, api } from "../api/client";
 import type { Issue, Student, UploadResult } from "../api/types";
 import { useClassName } from "../lib/classMeta";
-import { isLowResolution, processImages } from "../lib/image";
+import {
+  isAcceptedImage,
+  isLowResolution,
+  listRejectedImages,
+  processImages,
+} from "../lib/image";
 
 /** 安全创建 objectURL（jsdom / 隐私模式下可能不可用）。 */
 function safeCreateObjectURL(file: File): string {
@@ -22,6 +27,19 @@ function safeCreateObjectURL(file: File): string {
   } catch {
     return "";
   }
+}
+
+/** 格式提示：点名前两张 + 总数，并给可执行的改法（手机相机常见 HEIC）。 */
+function formatWarningText(names: string[]): string {
+  const head =
+    names.length > 2
+      ? names.slice(0, 2).join("、") + " 等 " + names.length + " 张"
+      : names.join("、");
+  return (
+    head +
+    " 是手机相机常用但后端不接收的格式（多为 iPhone HEIC）。" +
+    "请在手机「设置 → 相机 → 格式」选「兼容性（JPEG）」后重拍；其余照片已正常加入。"
+  );
 }
 
 export default function UploadPage() {
@@ -38,6 +56,8 @@ export default function UploadPage() {
   const [compressing, setCompressing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  /** 后端白名单外的照片（如 iPhone HEIC）文件名，选图当场提示改法。 */
+  const [rejectedNames, setRejectedNames] = useState<string[]>([]);
   const [result, setResult] = useState<UploadResult | null>(null);
   /** 学生搜索（名单较长时显示）。 */
   const [studentQuery, setStudentQuery] = useState("");
@@ -81,11 +101,19 @@ export default function UploadPage() {
       return;
     }
     setError("");
+    // 手机相册里的原片可能是后端白名单外的格式（iPhone 默认 HEIC，浏览器压不动时
+    // 只能降级上传原文件）。当场挑出来并给出可执行的改法，比等点提交后收到一句 400
+    // 好得多；其余能收的照片照常加入，不让一整批都白选。
+    setRejectedNames(listRejectedImages(picked));
+    const usable = picked.filter((file) => isAcceptedImage(file));
+    if (usable.length === 0) {
+      return;
+    }
     setCompressing(true);
     try {
       // processImages 只解码一次就同时给出压缩产物与**原图**尺寸：画质必须按原图判，
       // 否则 4000×3000 的手写页被压到 2000×1500 后会被误判为偏低。
-      const processed = await processImages(picked);
+      const processed = await processImages(usable);
       setFiles((previous) => [...previous, ...processed.map((item) => item.file)]);
       setThumbs((previous) => [...previous, ...processed.map((item) => safeCreateObjectURL(item.file))]);
       setLowRes((previous) => [
@@ -248,6 +276,15 @@ export default function UploadPage() {
           className="sr-only"
           onChange={handleFiles}
         />
+
+        {rejectedNames.length > 0 ? (
+          <p
+            data-testid="format-warning"
+            className="mt-3 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800"
+          >
+            {formatWarningText(rejectedNames)}
+          </p>
+        ) : null}
 
         {compressing ? <p className="mt-2 text-sm text-slate-500">压缩中…</p> : null}
 

@@ -230,6 +230,68 @@ def test_extract_title_form_header_rule_bounds(text: str, expected: str) -> None
     assert extract_title(text) == expected
 
 
+# 真机第二轮（2026-09-12）三张真实照片识别结果的首几行，原样抄录自 engine1_text：
+# 旧判据把「页眉署名」和「大题号」当成了标题，老师两次只能手填纠正。
+REAL_SIGNATURE_HEADER: str = "\n".join(
+    [
+        "逸云手写",
+        "\u201c致最美逆行者\u201d",
+        "作文题目：《岂曰无衣，与子同袍》",
+        "在2020年的年初，一场疫情席卷了神州大地，",
+    ]
+)
+REAL_SECTION_NUMBER_HEADER: str = "\n".join(
+    [
+        "四、写作",
+        "23. 题目：秉信念之烛，追时代之星",
+        "亲爱的同学们：",
+    ]
+)
+REAL_BODY_FIRST_LINE: str = "\n".join(
+    [
+        "三圈了，之后【?】胡老师他们跑完了",
+        "让我慢跑2圈之后回来，我本来还有三",
+    ]
+)
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        (REAL_SIGNATURE_HEADER, "岂曰无衣，与子同袍"),  # 与老师手填同题（书名号按规则剥离）
+        (REAL_SECTION_NUMBER_HEADER, "秉信念之烛，追时代之星"),  # 与老师手填完全一致
+        (REAL_BODY_FIRST_LINE, ""),  # 首行就是正文残句：留空给老师
+        ("作文题目：我的动物朋友", "我的动物朋友"),
+        ("习作标题：《我的动物朋友》", "我的动物朋友"),
+        ("24. 标题是《父亲的菜园》", "父亲的菜园"),
+        ("作文题目：\n\n我的动物朋友", "我的动物朋友"),  # 冒号后换行书写
+        ("作文题目：", ""),  # 有标签但没内容：不猜下一段正文
+    ],
+)
+def test_extract_title_label_line_cases(text: str, expected: str) -> None:
+    """FR-11 显式标签行优先：真机照片上写着「作文题目：」时必须抽得回来。"""
+    assert extract_title(text) == expected
+
+
+@pytest.mark.parametrize(
+    ("line", "expected"),
+    [
+        ("四、写作", ""),
+        ("三、", ""),
+        ("23. 秉信念之烛", ""),
+        ("第 23 题", ""),
+        ("逸云手写", ""),
+        ("@某某公众号", ""),
+        ("五月的风", "五月的风"),  # 「五月」不是题号：不误伤
+        ("2024年的夏天", "2024年的夏天"),  # 年份不是题号：不误伤
+    ],
+)
+def test_extract_title_rejects_header_and_signature_noise(line: str, expected: str) -> None:
+    """大题号/题号/署名水印四类噪声行只能出现在页眉，不能当标题印上整册 PDF。"""
+    assert extract_title(line + "\n\n正文正文正文内容") == expected
+
+
+
 # ---------------------------------------------------------------------------
 # 低画质扣分封顶（FR-10）
 # ---------------------------------------------------------------------------

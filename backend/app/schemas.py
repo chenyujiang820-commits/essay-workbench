@@ -309,6 +309,8 @@ class TemplateInfo(BaseModel):
 class BookItemOut(BaseModel):
     """成册/投屏共用条目。
 
+    ``is_draft`` 为真表示该篇尚未定稿、正文取的是识别初稿（仅投屏路径会置真）。
+
     ``comment`` 为二/三期评语位（FR-12 预留）：**必须在这里显式声明**，否则
     ``BookItemOut(**item)`` 会按 Pydantic 默认策略静默丢弃 ``build_items`` 透出的评语，
     投屏 JSON 与 PDF 就再也看不到它。
@@ -318,18 +320,26 @@ class BookItemOut(BaseModel):
     name: str = ""
     title: str = ""
     paragraphs: list[str] = Field(default_factory=list)
+    # ``is_draft`` 同样必须显式声明（见本类 docstring 里 comment 的教训）：不写就会被
+    # Pydantic 静默丢弃，投屏再也分不清哪篇是识别初稿。
+    is_draft: bool = False
     is_selected: bool = False
     comment: str = ""
 
 
 class PresentOut(BaseModel):
-    """投屏数据：把该期定稿作文渲染成逐篇结构。"""
+    """投屏数据：把该期**有文字的**作文渲染成逐篇结构（未定稿的用识别初稿并标 ``is_draft``）。"""
 
     class_name: str
     issue_no: int
     week_start_date: str
     generated_at: str
     items: list[BookItemOut] = Field(default_factory=list)
+    # 既没定稿也没识别文字的篇数（例如识别失败）：不进轮播，但要在界面上说清楚，
+    # 否则老师又会以为「篇目丢了」（GAP-14 的同一类误解）。
+    excluded_no_text: int = 0
+    # 其中未定稿（正文取的是识别初稿）的篇数：投屏页据此提示「黑板上讲的是初稿」。
+    draft_count: int = 0
 
 
 class ExportRequest(BaseModel):

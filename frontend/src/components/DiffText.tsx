@@ -13,6 +13,10 @@
  *
  * 展示文本：`equal/replace/delete` 用主引擎文本 `text_a`；`insert` 主引擎无字符，
  * 故展示复核引擎候选 `text_b`（否则插入点不可见、不可点）。
+ *
+ * 兜底（fallback）模式：全篇都没有 diff（真机高置信稿最常见）时，面板不再是一句空壳提示，
+ * 而是改渲染「识别原文对照」—— 用主引擎原文逐句比对定稿，标注未识别字与被改动/删减的
+ * 句子（见 buildOcrCompare）。兜底存疑点不计入 listSuspectKeys，因此不会触发定稿前的确认框。
  */
 
 import { useMemo, useState } from "react";
@@ -154,6 +158,173 @@ export function listSuspectKeys(photos: Photo[]): string[] {
   return keys;
 }
 
+/**
+ * 「识别原文对照」（fallback 模式）：全篇都没有 diff 时，面板不再只给一句空壳提示，
+ * 而是把主引擎原文与当前定稿逐句比对，标出可疑处。
+ *
+ * 计数口径（渲染与徽标共用 buildOcrCompare / listFallbackSuspectKeys，不会两头不一致）：
+ * * 按 `seq` 升序取各张 `engine1_text`（null / 纯空白跳过该张），**先按换行切行、行内再用
+ * splitSentences 逐句切开**（rev.4：只按句末标点切会把页眉与后面的长句并成一个单元，
+ * 老师删掉页眉后整句被连坐标红 —— 真机反馈「框画得有点麻烦」）；
+ * * 句中含未识别占位符（`?` `？` `□` `▯` 及包起来的 `【?】` `〔?〕`）时，只把占位符本身
+ *   标成「未识别」，整句不再重复标注 —— 与定稿的差异通常正是这些字造成的，重复画框只会更吵；
+ * * 句中无占位符、但归一化（去掉所有空白）后不在定稿里时，整句标成「已修改/删减」；
+ * * 纯标点碎句（`【?】` 断句后剩下的「。」等）不参与比对，避免噪声。
+ *
+ * 边界：fallback 存疑点**不**并入 listSuspectKeys。后者驱动 ProofreadPage 定稿前的
+ * FR-09「还有 N 处存疑未看」确认框，混进来会让每篇高置信稿都弹一次框，等于制造新摩擦。
+ */
+
+/** 未识别占位符：方括号形式优先匹配，避免 `【?】` 被拆成裸 `?` 后留下孤立括号。 */
+const UNKNOWN_MARK_SOURCE = "[\u3010\u3014][?\uFF1F\u25A1\u25AF][\u3011\u3015]|[?\uFF1F\u25A1\u25AF]";
+
+/** 实义字符：汉字 / 字母 / 数字。用于跳过纯标点碎句。 */
+const SUBSTANTIVE_SOURCE = "[\u4E00-\u9FFF0-9A-Za-z]";
+
+const OCR_UNKNOWN_TITLE = "主引擎未能识别这个字，点击定位原片核对";
+const OCR_CHANGED_TITLE =
+  "这一行/句没有出现在当前定稿里（多为页眉、表头或被改写的句子），点击定位原片核对";
+
+/** 全篇是否有任何一张照片带引擎 diff：决定面板走 diff 还是识别原文对照（两路径互斥）。 */
+export function hasAnyDiff(photos: Photo[]): boolean {
+  return photos.some((photo) => (photo.diff_json?.length ?? 0) > 0);
+}
+
+/**
+ * 当前生效的存疑清单：有 diff 用引擎 diff，全篇无 diff 用识别原文对照。
+ *
+ * 面板徽标与 ProofreadPage 的移动端页签计数共用此函数，避免两处各算一套（GAP-12）。
+ */
+export function listActiveSuspectKeys(photos: Photo[], value: string): string[] {
+  return hasAnyDiff(photos) ? listSuspectKeys(photos) : listFallbackSuspectKeys(photos, value);
+}
+
+/** fallback 存疑类别：`unknown` = 未识别字，`changed` = 定稿中已不存在的句子。 */
+export type OcrSuspectKind = "unknown" | "changed";
+
+export interface OcrComparePart {
+  text: string;
+  /** 存疑处的 key；普通文本为 null。 */
+  key: string | null;
+  kind: OcrSuspectKind | null;
+  title: string;
+}
+
+export interface OcrCompareLine {
+  seq: number;
+  parts: OcrComparePart[];
+}
+
+/** fallback 存疑处 key：`photoSeq:ocr:unitIndex`，与既有 `${seq}:${index}` 命名空间不冲突。 */
+export function ocrSuspectKey(seq: number, unitIndex: number): string {
+  return `${seq}:ocr:${unitIndex}`;
+}
+
+/** 比对用归一化：去掉所有空白（含全角空格），只保留文字本身。 */
+function normalizeForCompare(text: string): string {
+  return text.replace(/\s+/g, "");
+}
+
+/** 找出文本中所有未识别占位符的位置（按出现顺序）。 */
+function listUnknownMarks(text: string): Array<{ start: number; end: number }> {
+  const pattern = new RegExp(UNKNOWN_MARK_SOURCE, "g");
+  const marks: Array<{ start: number; end: number }> = [];
+  let match = pattern.exec(text);
+  while (match !== null) {
+    if (match[0].length > 0) {
+      marks.push({ start: match.index, end: match.index + match[0].length });
+    }
+    match = pattern.exec(text);
+  }
+  return marks;
+}
+
+function plainPart(text: string): OcrComparePart {
+  return { text, key: null, kind: null, title: "" };
+}
+
+function suspectPart(text: string, seq: number, unitIndex: number, kind: OcrSuspectKind): OcrComparePart {
+  return {
+    text,
+    key: ocrSuspectKey(seq, unitIndex),
+    kind,
+    title: kind === "unknown" ? OCR_UNKNOWN_TITLE : OCR_CHANGED_TITLE,
+  };
+}
+
+/** 逐句比对识别原文与定稿，产出「识别原文对照」的行与单元（无 diff 时使用）。 */
+export function buildOcrCompare(photos: Photo[], value: string): OcrCompareLine[] {
+  const finalText = normalizeForCompare(value);
+  const substantive = new RegExp(SUBSTANTIVE_SOURCE);
+  const lines: OcrCompareLine[] = [];
+  for (const photo of [...photos].sort((a, b) => a.seq - b.seq)) {
+    const recognized = photo.engine1_text ?? "";
+    if (recognized.trim() === "") {
+      continue;
+    }
+    const parts: OcrComparePart[] = [];
+    let unitIndex = 0;
+    // 先按行切、行内再按句切：OCR 原文的换行是天然单元，只按句末标点切会把
+    // 「页眉三行 + 第一个长句」并成一个单元（它们中间没有句号），于是老师删掉页眉后
+    // 整句被连坐标红 —— 真机反馈「框画得有点麻烦」正是这个（GAP-13）。
+    const rawLines = recognized.split(/\r?\n/);
+    rawLines.forEach((rawLine, linePosition) => {
+      if (linePosition > 0) {
+        // 保留换行，面板仍是 whitespace-pre-wrap 的原始行貌，不会糊成一整段。
+        parts.push(plainPart("\n"));
+      }
+      if (rawLine.trim() === "") {
+        return;
+      }
+      for (const sentence of splitSentences(rawLine)) {
+        const marks = listUnknownMarks(sentence);
+        if (marks.length > 0) {
+          let cursor = 0;
+          for (const mark of marks) {
+            if (mark.start > cursor) {
+              parts.push(plainPart(sentence.slice(cursor, mark.start)));
+            }
+            parts.push(suspectPart(sentence.slice(mark.start, mark.end), photo.seq, unitIndex, "unknown"));
+            unitIndex += 1;
+            cursor = mark.end;
+          }
+          if (cursor < sentence.length) {
+            parts.push(plainPart(sentence.slice(cursor)));
+          }
+          continue;
+        }
+        const normalized = normalizeForCompare(sentence);
+        const changed = substantive.test(normalized) && !finalText.includes(normalized);
+        parts.push(changed ? suspectPart(sentence, photo.seq, unitIndex, "changed") : plainPart(sentence));
+        if (changed) {
+          unitIndex += 1;
+        }
+      }
+    });
+    lines.push({ seq: photo.seq, parts });
+  }
+  return lines;
+}
+
+/** fallback 模式下的全篇存疑清单（按照片 seq → 句序），与面板渲染同源。 */
+export function listFallbackSuspectKeys(photos: Photo[], value: string): string[] {
+  const keys: string[] = [];
+  for (const line of buildOcrCompare(photos, value)) {
+    for (const part of line.parts) {
+      if (part.key !== null) {
+        keys.push(part.key);
+      }
+    }
+  }
+  return keys;
+}
+
+/** fallback 存疑点的视觉态：只有虚线下划线 + 文字色，不画底色和边框（移动端版面很紧）。 */
+const OCR_UNKNOWN_CLASS =
+  "rounded px-0.5 text-amber-800 underline decoration-dotted decoration-amber-600 underline-offset-4";
+const OCR_CHANGED_CLASS =
+  "rounded px-0.5 text-rose-700 underline decoration-dotted decoration-rose-500 underline-offset-4";
+
 /** 已查看存疑处的视觉态：去掉高亮底色，改为描边 + 弱化文字色，保持可点击。 */
 const VIEWED_CLASS =
   "rounded bg-white/70 px-0.5 text-slate-600 ring-1 ring-inset ring-slate-400";
@@ -196,19 +367,31 @@ export default function DiffText({
   onSuspectView,
   disabled = false,
 }: DiffTextProps) {
-  const hasDiff = photos.some((photo) => (photo.diff_json?.length ?? 0) > 0);
+  const hasDiff = hasAnyDiff(photos);
   /** 对照面板展开态：初始恒为展开（不做 localStorage 持久化，进入页面即复位）。 */
   const [panelOpen, setPanelOpen] = useState(true);
   const viewed = viewedSuspects ?? EMPTY_VIEWED;
 
   const suspectKeys = useMemo(() => listSuspectKeys(photos), [photos]);
+  /** fallback（识别原文对照）：仅在全篇都没有 diff 时启用，与 diff 渲染路径互斥。 */
+  const ocrLines = useMemo<OcrCompareLine[]>(
+    () => (hasDiff ? [] : buildOcrCompare(photos, value)),
+    [hasDiff, photos, value],
+  );
+  // 徽标里的 N 直接取 listFallbackSuspectKeys，与面板渲染同一口径，不会两处算得不一样。
+  const fallbackKeys = useMemo(
+    () => (hasDiff ? [] : listFallbackSuspectKeys(photos, value)),
+    [hasDiff, photos, value],
+  );
+  const activeKeys = hasDiff ? suspectKeys : fallbackKeys;
   const viewedCount = useMemo(
-    () => suspectKeys.filter((key) => viewed.has(key)).length,
-    [suspectKeys, viewed],
+    () => activeKeys.filter((key) => viewed.has(key)).length,
+    [activeKeys, viewed],
   );
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-3">
+    // 桌面端撑满分栏高度；移动端按内容自然撑开，由外层分栏区滚动，避免定稿框被压成两行
+    <div className="flex min-h-0 flex-col gap-3 lg:h-full">
       <label className="flex min-h-0 flex-[3] flex-col gap-1 text-sm font-medium text-slate-700">
         定稿文字
         <textarea
@@ -229,12 +412,12 @@ export default function DiffText({
       >
         <summary className="shrink-0 cursor-pointer select-none px-4 py-2 text-sm font-medium text-slate-600">
           <span className="mr-2">识别对照（存疑高亮）</span>
-          {suspectKeys.length > 0 ? (
+          {activeKeys.length > 0 ? (
             <span
               data-testid="suspect-counter"
               className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800"
             >
-              存疑 {suspectKeys.length} 处 · 已查看 {viewedCount} 处
+              存疑 {activeKeys.length} 处 · 已查看 {viewedCount} 处
             </span>
           ) : (
             <span
@@ -301,11 +484,69 @@ export default function DiffText({
                 </p>
               </div>
             ))
-          ) : (
+          ) : ocrLines.length === 0 ? (
             <p className="text-sm text-slate-500">
               暂无 diff 数据（本篇识别置信度较高、复核引擎未介入，或复核未返回文本），
-              请直接对照左侧原片核对并在上方编辑。
+              也没有可用的主引擎识别文本，请直接对照左侧原片核对并在上方编辑。
             </p>
+          ) : activeKeys.length === 0 ? (
+            <p data-testid="ocr-compare-clean" className="text-sm leading-6 text-emerald-700">
+              识别原文与定稿一致，未发现存疑字。
+            </p>
+          ) : (
+            <div data-testid="ocr-compare" className="flex flex-col gap-2">
+              <p className="text-xs leading-5 text-slate-400">
+                识别原文对照（复核引擎未介入）：
+                <span className={OCR_UNKNOWN_CLASS}>橙色虚线</span>为未识别字、
+                <span className={OCR_CHANGED_CLASS}>红色虚线</span>为定稿中已不存在的句子；点标注可定位原片。
+              </p>
+              {ocrLines.map((line) => (
+                <p
+                  key={`ocr-line-${line.seq}`}
+                  data-testid={`ocr-line-${line.seq}`}
+                  className="whitespace-pre-wrap break-words text-base leading-8 text-slate-800"
+                >
+                  {photos.length > 1 ? (
+                    <span className="mr-1 text-xs text-slate-400">第 {line.seq} 张</span>
+                  ) : null}
+                  {line.parts.map((part, partIndex) => {
+                    if (part.key === null) {
+                      return <span key={partIndex}>{part.text}</span>;
+                    }
+                    const key = part.key;
+                    const seen = viewed.has(key);
+                    const markClass = part.kind === "unknown" ? OCR_UNKNOWN_CLASS : OCR_CHANGED_CLASS;
+                    return (
+                      <span
+                        key={key}
+                        data-suspect={part.kind === "unknown" ? "ocr-unknown" : "ocr-changed"}
+                        data-suspect-key={key}
+                        data-viewed={seen ? "1" : undefined}
+                        data-photo-seq={line.seq}
+                        title={seen ? `${part.title}（已查看，可再次点开定位原片）` : part.title}
+                        role="button"
+                        tabIndex={0}
+                        aria-pressed={seen}
+                        className={`${seen ? VIEWED_CLASS : markClass} cursor-pointer`}
+                        onClick={() => {
+                          onSuspectView?.(key);
+                          onSelectPhoto?.(line.seq);
+                        }}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter" || event.key === " ") {
+                            event.preventDefault();
+                            onSuspectView?.(key);
+                            onSelectPhoto?.(line.seq);
+                          }
+                        }}
+                      >
+                        {part.text}
+                      </span>
+                    );
+                  })}
+                </p>
+              ))}
+            </div>
           )}
         </section>
       </details>
