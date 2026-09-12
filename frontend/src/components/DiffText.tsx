@@ -370,6 +370,8 @@ export default function DiffText({
   const hasDiff = hasAnyDiff(photos);
   /** 对照面板展开态：初始恒为展开（不做 localStorage 持久化，进入页面即复位）。 */
   const [panelOpen, setPanelOpen] = useState(true);
+  /** 桌面端「放大」态：对照面板吃满整列、定稿框压成一条，用于通读长对照。 */
+  const [compareFocused, setCompareFocused] = useState(false);
   const viewed = viewedSuspects ?? EMPTY_VIEWED;
 
   const suspectKeys = useMemo(() => listSuspectKeys(photos), [photos]);
@@ -389,10 +391,23 @@ export default function DiffText({
     [activeKeys, viewed],
   );
 
+  // 对照内容规模提示：面板内部滚动，不告诉老师还有多少行，就等于「显示不齐全」。
+  const compareCount = hasDiff
+    ? photos.reduce((acc, photo) => acc + (photo.diff_json?.length ?? 0), 0)
+    : ocrLines.length;
+  const compareUnit = hasDiff ? "段" : "行";
+
   return (
-    // 桌面端撑满分栏高度；移动端按内容自然撑开，由外层分栏区滚动，避免定稿框被压成两行
+    // 桌面端撑满分栏高度；移动端按内容自然撑开，由外层分栏区滚动，避免定稿框被压成两行。
+    // 刻意不用 <details>/<summary>：Chromium 把 details 的非 summary 子节点包进
+    // ::details-content 匿名盒，section 上的 flex-1/min-h-0 落不到真正的 flex 子项上，
+    // 面板于是按内容长高、溢出被分栏的 overflow-hidden 裁掉，滚动条也不出现（真机「显示不齐全」）。
     <div className="flex min-h-0 flex-col gap-3 lg:h-full">
-      <label className="flex min-h-0 flex-[3] flex-col gap-1 text-sm font-medium text-slate-700">
+      <label
+        className={`flex min-h-0 flex-col gap-1 text-sm font-medium text-slate-700 ${
+          compareFocused ? "flex-none lg:h-[92px]" : "flex-[2]"
+        }`}
+      >
         定稿文字
         <textarea
           data-testid="final-text"
@@ -404,14 +419,26 @@ export default function DiffText({
         />
       </label>
 
-      <details
+      <div
         data-testid="diff-details"
-        className="flex min-h-0 flex-[2] flex-col rounded-lg border border-slate-200 bg-slate-50"
-        open={panelOpen}
-        onToggle={(event) => setPanelOpen(event.currentTarget.open)}
+        className={`flex min-h-0 flex-col rounded-lg border border-slate-200 bg-slate-50 ${
+          compareFocused ? "flex-1" : "flex-[3]"
+        }`}
       >
-        <summary className="shrink-0 cursor-pointer select-none px-4 py-2 text-sm font-medium text-slate-600">
-          <span className="mr-2">识别对照（存疑高亮）</span>
+        <div className="flex shrink-0 flex-wrap items-center gap-2 px-4 py-2 text-sm font-medium text-slate-600">
+          <button
+            type="button"
+            data-testid="diff-toggle"
+            aria-expanded={panelOpen}
+            aria-controls="diff-annotated"
+            className="cursor-pointer select-none"
+            onClick={() => setPanelOpen((open) => !open)}
+          >
+            <span aria-hidden="true" className="mr-1">
+              {panelOpen ? "▾" : "▸"}
+            </span>
+            识别对照（存疑高亮）
+          </button>
           {activeKeys.length > 0 ? (
             <span
               data-testid="suspect-counter"
@@ -427,9 +454,27 @@ export default function DiffText({
               无存疑
             </span>
           )}
-        </summary>
+          <span className="ml-auto flex items-center gap-2 text-xs font-normal text-slate-500">
+            {compareCount > 0 ? (
+              <span data-testid="compare-count">
+                共 {compareCount} {compareUnit}
+              </span>
+            ) : null}
+            <button
+              type="button"
+              data-testid="diff-focus"
+              aria-pressed={compareFocused}
+              className="cursor-pointer rounded border border-slate-300 px-2 py-0.5 text-xs text-slate-700 hover:bg-white"
+              onClick={() => setCompareFocused((focused) => !focused)}
+            >
+              {compareFocused ? "还原" : "放大"}
+            </button>
+          </span>
+        </div>
         <section
+          id="diff-annotated"
           data-testid="diff-annotated"
+          hidden={!panelOpen}
           className="min-h-0 flex-1 overflow-auto border-t border-slate-200 bg-white p-4 leading-8"
         >
           {hasDiff ? (
@@ -549,7 +594,7 @@ export default function DiffText({
             </div>
           )}
         </section>
-      </details>
+      </div>
     </div>
   );
 }

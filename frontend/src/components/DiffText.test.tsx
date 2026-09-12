@@ -144,7 +144,40 @@ describe("DiffText rendering", () => {
         onChange={() => undefined}
       />,
     );
-    expect((screen.getByTestId("diff-details") as HTMLDetailsElement).open).toBe(true);
+    expect(screen.getByTestId("diff-toggle").getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByTestId("diff-annotated").hasAttribute("hidden")).toBe(false);
+  });
+
+  it("collapses the comparison panel from its own toggle instead of a details summary", () => {
+    render(
+      <DiffText
+        photos={[photo(1, [{ type: "replace", text_a: "校园", text_b: "学校" }])]}
+        value=""
+        onChange={() => undefined}
+      />,
+    );
+    const toggle = screen.getByTestId("diff-toggle");
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.getByTestId("diff-annotated").hasAttribute("hidden")).toBe(true);
+    fireEvent.click(toggle);
+    expect(screen.getByTestId("diff-annotated").hasAttribute("hidden")).toBe(false);
+  });
+
+  it("tells the teacher how much reference content is inside the scrollable panel", () => {
+    render(
+      <DiffText
+        photos={[photo(1, [{ type: "replace", text_a: "校园", text_b: "学校" }])]}
+        value=""
+        onChange={() => undefined}
+      />,
+    );
+    expect(screen.getByTestId("compare-count").textContent).toContain("共 1 段");
+    const focus = screen.getByTestId("diff-focus");
+    expect(focus.getAttribute("aria-pressed")).toBe("false");
+    fireEvent.click(focus);
+    expect(focus.getAttribute("aria-pressed")).toBe("true");
+    expect(focus.textContent).toBe("还原");
   });
 
   it("reports the suspect key when a suspect is clicked and when Enter is pressed", () => {

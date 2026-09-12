@@ -48,6 +48,15 @@ SCROLL_JS = """() => {
   if (e) e.scrollIntoView(true);
 }"""
 
+PANEL_END_JS = """() => {
+  const e = document.querySelector('[data-testid="diff-annotated"]');
+  if (e) {
+    e.scrollTop = e.scrollHeight;
+    e.scrollIntoView(false);
+  }
+  return true;
+}"""
+
 AFTER_JS = """() => {
   const e =
     document.querySelector('[data-testid="ocr-compare"]') ||
@@ -62,26 +71,28 @@ AFTER_JS = """() => {
 }"""
 
 
-SCROLL_END_JS = """() => {
-  const e =
-    document.querySelector('[data-testid="diff-annotated"]') ||
-    document.querySelector('[data-testid="ocr-compare"]');
-  if (e) e.scrollIntoView(false);
-  return true;
-}"""
-
 TAIL_JS = """() => {
-  const e =
+  const panel = document.querySelector('[data-testid="diff-annotated"]');
+  const content =
     document.querySelector('[data-testid="ocr-compare"]') ||
     document.querySelector('[data-testid="ocr-compare-clean"]');
-  if (!e) return null;
-  const b = e.getBoundingClientRect();
+  if (!panel) return null;
+  const panelRect = panel.getBoundingClientRect();
+  const contentRect = content ? content.getBoundingClientRect() : null;
+  const style = getComputedStyle(panel);
   const se = document.scrollingElement || document.documentElement;
   return {
-    bottom: Math.round(b.bottom),
-    height: Math.round(b.height),
-    tailVisible: b.bottom <= window.innerHeight + 2,
-    canScroll: se.scrollHeight > se.clientHeight + 1
+    bottom: Math.round(panelRect.bottom),
+    height: Math.round(panelRect.height),
+    panelClientHeight: panel.clientHeight,
+    panelScrollHeight: panel.scrollHeight,
+    panelScrollTop: Math.round(panel.scrollTop),
+    panelOverflowY: style.overflowY,
+    panelCanScroll: panel.scrollHeight > panel.clientHeight + 1,
+    panelAtEnd: panel.scrollTop + panel.clientHeight >= panel.scrollHeight - 1,
+    tailVisible: panelRect.bottom <= window.innerHeight + 2,
+    contentBottom: contentRect ? Math.round(contentRect.bottom) : null,
+    documentCanScroll: se.scrollHeight > se.clientHeight + 1
   };
 }"""
 
@@ -136,7 +147,7 @@ def snap(page: Any) -> dict[str, Any]:
     page.evaluate(SCROLL_JS)
     page.wait_for_timeout(250)
     data["afterScroll"] = page.evaluate(AFTER_JS)
-    page.evaluate(SCROLL_END_JS)
+    page.evaluate(PANEL_END_JS)
     page.wait_for_timeout(250)
     data["tail"] = page.evaluate(TAIL_JS)
     data["marks"] = page.evaluate(MARKS_JS)
@@ -169,8 +180,12 @@ def check(width: int, height: int, data: dict[str, Any], essay: int) -> list[str
     if not after.get("inView"):
         problems.append("识别对照滚不进视野")
     # 「整页可滚」不是目的，能读到底才是：桌面一屏放得下时本来就不需要滚动。
-    if not tail.get("tailVisible") and not tail.get("canScroll"):
-        problems.append("识别对照底部读不到（面板高 " + str(tail.get("height")) + "px）")
+    if tail.get("panelOverflowY") != "auto":
+        problems.append("识别对照未启用内部滚动（overflow-y=" + str(tail.get("panelOverflowY")) + "）")
+    if tail.get("panelCanScroll") and not tail.get("panelAtEnd"):
+        problems.append("识别对照内部滚动不到底（" + str(tail.get("panelScrollTop")) + "/" + str(tail.get("panelScrollHeight")) + "px）")
+    if not tail.get("tailVisible") and not tail.get("documentCanScroll"):
+        problems.append("识别对照面板滚不进视野（面板高 " + str(tail.get("height")) + "px）")
     if data["tabsVisible"] and width < height:
         # 手机端原片页：盒子有高度不等于照片看得见，照片本身也得撑开。
         if data["viewerHeight"] < 200:
@@ -258,4 +273,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     sys.exit(main(sys.argv[1:]))
-

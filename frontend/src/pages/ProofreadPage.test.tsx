@@ -415,13 +415,13 @@ describe("ProofreadPage", () => {
 
   it("keeps the diff panel expanded on every entry without persisting anything", async () => {    const { unmount } = renderEssay({ photos: twoSuspects, low_confidence: 0 });
     await screen.findByTestId("final-text");
-    expect((screen.getByTestId("diff-details") as HTMLDetailsElement).open).toBe(true);
+    expect(screen.getByTestId("diff-toggle").getAttribute("aria-expanded")).toBe("true");
     expect(screen.getByTestId("suspect-counter").textContent).toContain("存疑 2 处");
     unmount();
 
     renderEssay({ photos: twoSuspects, low_confidence: 0 });
     await screen.findByTestId("final-text");
-    expect((screen.getByTestId("diff-details") as HTMLDetailsElement).open).toBe(true);
+    expect(screen.getByTestId("diff-toggle").getAttribute("aria-expanded")).toBe("true");
     // 折叠状态与已查看集合都不落 localStorage（每次进入复位）。
     expect(window.localStorage.length).toBe(0);
   });
