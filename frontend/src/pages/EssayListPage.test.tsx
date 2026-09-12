@@ -1,7 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { RouterProvider, createMemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-
 import { ApiError, api } from "../api/client";
 import type { EssaySummary, Issue, SelectionResult, UploadResult } from "../api/types";
 import EssayListPage from "./EssayListPage";
@@ -186,5 +185,224 @@ describe("EssayListPage", () => {
     expect(await screen.findByText("该篇没有原片，无法识别")).toBeTruthy();
     expect(screen.queryByTestId("board-retry-2")).toBeTruthy();
     expect(screen.queryByTestId("board-retry-notice")).toBeNull();
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// FR-05 本期精选：勾选只改内存，「保存精选」覆盖式提交整期集合
+// ---------------------------------------------------------------------------
+
+const selIssue: Issue = {
+  id: 1,
+  issue_no: 4,
+  week_start_date: "2026-09-07",
+  created_at: "2026-09-07T00:00:00+00:00",
+  essay_count: 10,
+};
+
+function mk(overrides: Partial<EssaySummary> = {}): EssaySummary {
+  return {
+    id: 11,
+    issue_id: 1,
+    student_id: 201,
+    student_name: "张三",
+    title: "春天",
+    status: "proofread",
+    low_confidence: 0,
+    photo_count: 1,
+    low_resolution_count: 0,
+    created_at: "2026-09-07T00:00:00+00:00",
+    proofread_at: null,
+    teacher_comment: null,
+    score: 90,
+    stars: 0,
+    selected: 0,
+    ...overrides,
+  };
+}
+
+function mkList(count: number, overrides: Partial<EssaySummary> = {}): EssaySummary[] {
+  return Array.from({ length: count }, (_, index) =>
+    mk({
+      id: 11 + index,
+      student_id: 201 + index,
+      student_name: "学生" + String(index + 1),
+      score: 90 - index,
+      ...overrides,
+    }),
+  );
+}
+
+function mkResult(ids: number[], overrides: Partial<SelectionResult> = {}): SelectionResult {
+  return {
+    issue_id: 1,
+    selected_ids: ids,
+    limit: 10,
+    suggested: 5,
+    scored_count: ids.length,
+    unscored_count: 0,
+    ...overrides,
+  };
+}
+
+function renderSelectionBoard(list: EssaySummary[]) {
+  const router = createMemoryRouter(
+    [
+      { path: "/", element: <div>期数列表页</div> },
+      { path: "/issues/:issueId/essays", element: <EssayListPage /> },
+      { path: "/essays/:essayId/proofread", element: <div>校对页</div> },
+      { path: "/issues/:issueId/ranking", element: <div>表彰榜页</div> },
+      { path: "/issues/:issueId/shares", element: <div>分享管理页</div> },
+    ],
+    { initialEntries: ["/issues/1/essays"] },
+  );
+  return render(<RouterProvider router={router} />);
+}
+
+function checkBox(id: number): HTMLInputElement {
+  return screen.getByTestId("select-essay-" + String(id)) as HTMLInputElement;
+}
+
+describe("EssayListPage 本期精选（FR-05）", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(api.getIssue).mockResolvedValue(selIssue);
+    vi.mocked(api.listIssueEssays).mockResolvedValue(mkList(10));
+  });
+
+  it("renders the selection panel with the per-issue limit", async () => {
+    renderSelectionBoard(mkList(10));
+
+    expect((await screen.findByTestId("selection-panel")).textContent).toContain("本期精选");
+    expect(screen.getByTestId("selection-limit").textContent).toContain("已勾 0 / 10 篇");
+    expect(screen.getByTestId("selection-note").textContent).toContain("保存精选");
+  });
+
+  it("starts from the server-echoed selection and keeps submit disabled while untouched", async () => {
+    renderSelectionBoard(mkList(10, { selected: 1 }));
+    await screen.findByTestId("selection-panel");
+
+    expect(checkBox(11).checked).toBe(true);
+    expect(screen.getByTestId("selection-saved-11").textContent).toContain("已存");
+    expect(screen.getByTestId("selection-limit").textContent).toContain("已勾 10 / 10 篇");
+    expect(screen.getByTestId("submit-selection").disabled).toBe(true);
+  });
+
+  it("submits the whole set and repaints from the server echo, not from the click", async () => {
+    vi.mocked(api.setSelection).mockResolvedValue(mkResult([12]));
+    renderSelectionBoard(mkList(10));
+    await screen.findByTestId("selection-panel");
+
+    fireEvent.click(checkBox(11));
+    fireEvent.click(checkBox(12));
+    expect(screen.getByTestId("submit-selection").disabled).toBe(false);
+    fireEvent.click(screen.getByTestId("submit-selection"));
+
+    await waitFor(() => expect(api.setSelection).toHaveBeenCalledWith(1, [11, 12]));
+    expect((await screen.findByTestId("selection-notice")).textContent).toContain("共 1 篇");
+    expect(checkBox(12).checked).toBe(true);
+    expect(checkBox(11).checked).toBe(false);
+    expect(screen.getByTestId("selection-saved-12")).toBeTruthy();
+    expect(screen.queryByTestId("selection-saved-11")).toBeNull();
+  });
+
+  it("surfaces the backend reason on failure, keeps the notice away and reloads", async () => {
+    vi.mocked(api.setSelection).mockRejectedValue(new ApiError("精选里含未定稿作文", 400, 400));
+    renderSelectionBoard(mkList(10));
+    await screen.findByTestId("selection-panel");
+    const loadsBefore = vi.mocked(api.listIssueEssays).mock.calls.length;
+
+    fireEvent.click(checkBox(11));
+    fireEvent.click(screen.getByTestId("submit-selection"));
+
+    expect((await screen.findByTestId("selection-error")).textContent).toContain("精选里含未定稿作文");
+    expect(screen.queryByTestId("selection-notice")).toBeNull();
+    await waitFor(() =>
+      expect(vi.mocked(api.listIssueEssays).mock.calls.length).toBe(loadsBefore + 1),
+    );
+    // 失败后勾选必须看起来没变：重拉按后端回读值重置
+    expect(checkBox(11).checked).toBe(false);
+  });
+
+  it("blocks an over-cap set locally without calling the API", async () => {
+    renderSelectionBoard(mkList(11));
+    await screen.findByTestId("selection-panel");
+
+    for (let id = 11; id <= 21; id += 1) {
+      fireEvent.click(checkBox(id));
+    }
+    expect(screen.getByTestId("selection-limit").textContent).toContain("已勾 11 / 10 篇");
+
+    fireEvent.click(screen.getByTestId("submit-selection"));
+    expect((await screen.findByTestId("selection-error")).textContent).toContain("最多 10 篇");
+    expect(api.setSelection).not.toHaveBeenCalled();
+  });
+
+  it("suggests the top five scored essays without saving them", async () => {
+    const list = mkList(8);
+    list[2] = { ...list[2], score: null }; // 13 号未评分：不进建议
+    renderSelectionBoard(list);
+    await screen.findByTestId("selection-panel");
+
+    fireEvent.click(screen.getByTestId("selection-suggest"));
+    await waitFor(() => expect(checkBox(11).checked).toBe(true));
+
+    expect(checkBox(16).checked).toBe(true);
+    expect(checkBox(13).checked).toBe(false);
+    expect(checkBox(17).checked).toBe(false);
+    expect(screen.getByTestId("selection-limit").textContent).toContain("已勾 5 / 10 篇");
+    expect(api.setSelection).not.toHaveBeenCalled();
+  });
+
+  it("keeps the checkbox away from essays that are not finalized", async () => {
+    renderSelectionBoard([mk({ id: 11, status: "review" }), mk({ id: 12 })]);
+    await screen.findByTestId("selection-panel");
+
+    expect(checkBox(11).disabled).toBe(true);
+    expect(checkBox(12).disabled).toBe(false);
+  });
+
+  it("reports the scoring gap with the same rule as the three boards", async () => {
+    renderSelectionBoard([
+      mk({ id: 11, score: 92 }),
+      mk({ id: 12, score: null }),
+      mk({ id: 13, score: null }),
+      mk({ id: 14, status: "review", score: null }),
+    ]);
+
+    const hint = await screen.findByTestId("board-score-progress");
+    expect(hint.textContent).toContain("本期已定稿 3 篇");
+    expect(hint.textContent).toContain("其中 2 篇还没有评分");
+  });
+
+  it("keeps the scoring hint away once every finalized essay is scored", async () => {
+    renderSelectionBoard(mkList(3));
+    await screen.findByTestId("selection-panel");
+
+    expect(screen.queryByTestId("board-score-progress")).toBeNull();
+  });
+
+  it("links the board to the awards page and the share manager", async () => {
+    renderSelectionBoard(mkList(2));
+    await screen.findByTestId("board-ranking");
+
+    fireEvent.click(screen.getByTestId("board-ranking"));
+    expect(await screen.findByText("表彰榜页")).toBeTruthy();
+  });
+
+  it("opens the share manager from the board", async () => {
+    renderSelectionBoard(mkList(2));
+    await screen.findByTestId("board-shares");
+
+    fireEvent.click(screen.getByTestId("board-shares"));
+    expect(await screen.findByText("分享管理页")).toBeTruthy();
+  });
+
+  it("shows stars only when the backend sent a star count", async () => {
+    renderSelectionBoard([mk({ id: 11, student_name: "张三", stars: 4 }), mk({ id: 12, student_name: "李四", stars: 0 })]);
+    await screen.findByText("张三");
+
+    expect(screen.getAllByTestId("stars")).toHaveLength(1);
   });
 });
