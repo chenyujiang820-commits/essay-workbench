@@ -12,7 +12,12 @@ import type {
   Issue,
   LoginResult,
   MetaInfo,
+  PortfolioData,
   PresentData,
+  RankingData,
+  SelectionResult,
+  ShareLink,
+  ShareView,
   Student,
   TemplateInfo,
   UploadResult,
@@ -80,8 +85,22 @@ function normalizeErrorCode(raw: unknown, status: number): number {
   return status > 0 ? status : 500;
 }
 
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const headers = authHeaders(init.headers);
+/**
+ * 免鉴权调用选项（家长分享通道专用）。
+ *
+ * 不带 Authorization 是刻意的：家长页是一个公开 URL，若在老师仍登录的浏览器里打开，
+ * 顺带发出管理端 token 等于把凭据交给一个任何人都能访问的页面（同域脚本可读）。
+ */
+interface CallOptions {
+  anonymous?: boolean;
+}
+
+function callHeaders(init: RequestInit, anonymous?: boolean): Headers {
+  return anonymous ? new Headers(init.headers) : authHeaders(init.headers);
+}
+
+async function request<T>(path: string, init: RequestInit = {}, options: CallOptions = {}): Promise<T> {
+  const headers = callHeaders(init, options.anonymous);
   if (init.body && !(init.body instanceof FormData)) {
     headers.set("Content-Type", "application/json");
   }
@@ -146,8 +165,12 @@ async function requestBlob(path: string, init: RequestInit = {}): Promise<Blob> 
 }
 
 /** 获取文本资源（如成册预览 HTML），失败时解析错误信封文案。 */
-async function requestText(path: string, init: RequestInit = {}): Promise<string> {
-  const headers = authHeaders(init.headers);
+async function requestText(
+  path: string,
+  init: RequestInit = {},
+  options: CallOptions = {},
+): Promise<string> {
+  const headers = callHeaders(init, options.anonymous);
   const response = await fetch(`${API_BASE}${path}`, { ...init, headers });
   if (!response.ok) {
     let message = `请求失败（HTTP ${response.status}）`;
@@ -252,9 +275,23 @@ export const api = {
     return request<EssayDetail>(`/essays/${essayId}`);
   },
 
+  /**
+   * 保存校对结果；v1.3 起可一并提交评语 / 评分 / 精选。
+   *
+   * 三态语义：字段不传 = 本次不改；``teacher_comment: ""`` 与 ``score: null``
+   * 都是**显式清空**（评分清空后星级归零，不会留"0 分 4 星"那种半套状态）。
+   * 三者都不参与状态机：只写评语绝不会把未定稿推成 proofread（后端有单独用例守这条）。
+   */
   updateEssay(
     essayId: number,
-    payload: { final_text: string; proofread: boolean; title?: string },
+    payload: {
+      final_text: string;
+      proofread: boolean;
+      title?: string;
+      teacher_comment?: string | null;
+      score?: number | null;
+      selected?: 0 | 1;
+    },
   ): Promise<EssayDetail> {
     return request<EssayDetail>(`/essays/${essayId}`, {
       method: "PATCH",
@@ -325,6 +362,76 @@ export const api = {
     return requestBlob(`/exports/${issueId}/single/${essayId}?${query.toString()}`, {
       method: "POST",
     });
+  },
+
+  // -- 二期（v1.3）：精选 / 三榜 / 档案 / 家长分享 -------------------------
+  /**
+   * 整期覆盖式设置精选（一次提交整个集合，不逐篇开关）。
+   *
+   * 返回的是后端回读的最终态：界面按它重绘，不做乐观更新（提交失败时勾选不能看起来变了）。
+   */
+  setSelection(issueId: number, essayIds: number[]): Promise<SelectionResult> {
+    return request<SelectionResult>(`/issues/${issueId}/selection`, {
+      method: "PUT",
+      body: JSON.stringify({ essay_ids: essayIds }),
+    });
+  },
+
+  /** 三榜（佳作 / 进步 / 星级）与其开关、可见性。 */
+  fetchRanking(issueId: number): Promise<RankingData> {
+    return request<RankingData>(`/issues/${issueId}/ranking`);
+  },
+
+  /** 单个学生的成长档案（只含已定稿作文）。 */
+  fetchPortfolio(studentId: number): Promise<PortfolioData> {
+    return request<PortfolioData>(`/students/${studentId}/portfolio`);
+  },
+
+  /** 导出"本周精选"海报 PDF（A4 单页，发家长群）。 */
+  exportPoster(issueId: number): Promise<Blob> {
+    return requestBlob(`/exports/${issueId}/poster`, { method: "POST" });
+  },
+
+  /** 导出单生个人文集 PDF。order: issue_no（默认，期号倒序）| student_no | name | score。 */
+  exportPortfolio(studentId: number, template: string, order = "issue_no"): Promise<Blob> {
+    const query = new URLSearchParams({ template, order });
+    return requestBlob(`/exports/students/${studentId}/portfolio?${query.toString()}`, {
+      method: "POST",
+    });
+  },
+
+  /** 建家长分享链接（days 1~90；studentId 留空 = 整期）。 */
+  createShare(issueId: number, body: { days?: number; student_id?: number | null; label?: string }): Promise<ShareLink> {
+    return request<ShareLink>(`/issues/${issueId}/shares`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+  },
+
+  /** 分享链接列表（含已撤销/已过期，便于老师复查"我发过哪几条"）。 */
+  listShares(issueId?: number): Promise<ShareLink[]> {
+    const suffix = issueId === undefined ? "" : `?issue_id=${issueId}`;
+    return request<ShareLink[]>(`/shares${suffix}`);
+  },
+
+  /** 撤销一条分享链接（后端置标记、不删行）。 */
+  revokeShare(token: string): Promise<{ revoked: number }> {
+    return request<{ revoked: number }>(`/shares/${token}`, { method: "DELETE" });
+  },
+
+  /**
+   * 家长只读视图：**免鉴权**、且刻意不带 Authorization。
+   *
+   * 令牌无效时后端统一返回 410（不存在 / 已撤销 / 已过期同一文案），ApiError.code === 410。
+   */
+  fetchShareView(token: string): Promise<ShareView> {
+    return request<ShareView>(`/share/${token}`, {}, { anonymous: true });
+  },
+
+  /** 家长只读预览 HTML（与成册同一套模板）：给"打印/存 PDF"用，同样免鉴权。 */
+  fetchSharePreview(token: string, template = "elegant"): Promise<string> {
+    const query = new URLSearchParams({ template });
+    return requestText(`/share/${token}/preview?${query.toString()}`, {}, { anonymous: true });
   },
 };
 

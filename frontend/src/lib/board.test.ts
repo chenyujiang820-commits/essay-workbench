@@ -15,6 +15,10 @@ function essay(partial: Partial<EssaySummary> & { id: number }): EssaySummary {
     low_resolution_count: 0,
     created_at: "2026-09-07T00:00:00+00:00",
     proofread_at: null,
+    teacher_comment: null,
+    score: null,
+    stars: 0,
+    selected: 0,
     ...partial,
   };
 }

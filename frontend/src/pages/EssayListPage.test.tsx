@@ -3,7 +3,7 @@ import { RouterProvider, createMemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ApiError, api } from "../api/client";
-import type { EssaySummary, Issue, UploadResult } from "../api/types";
+import type { EssaySummary, Issue, SelectionResult, UploadResult } from "../api/types";
 import EssayListPage from "./EssayListPage";
 
 vi.mock("../api/client", async (importOriginal) => {
@@ -15,6 +15,7 @@ vi.mock("../api/client", async (importOriginal) => {
       getIssue: vi.fn(),
       listIssueEssays: vi.fn(),
       retryEssay: vi.fn(),
+      setSelection: vi.fn(),
     },
   };
 });
@@ -40,6 +41,10 @@ const essays: EssaySummary[] = [
     low_resolution_count: 0,
     created_at: "2026-09-07T00:00:00+00:00",
     proofread_at: null,
+    teacher_comment: null,
+    score: null,
+    stars: 0,
+    selected: 0,
   },
 ];
 
@@ -107,6 +112,10 @@ describe("EssayListPage", () => {
       low_resolution_count: 0,
       created_at: "2026-09-07T00:00:00+00:00",
       proofread_at: null,
+      teacher_comment: null,
+      score: null,
+      stars: 0,
+      selected: 0,
     }));
     vi.mocked(api.listIssueEssays).mockResolvedValue(many);
 

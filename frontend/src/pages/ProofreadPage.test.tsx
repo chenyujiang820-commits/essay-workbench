@@ -40,6 +40,7 @@ const detail: EssayDetail = {
   final_text: "",
   teacher_comment: null,
   score: null,
+  stars: 0,
   selected: 0,
   photos: [
     {

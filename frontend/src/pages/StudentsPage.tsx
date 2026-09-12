@@ -245,6 +245,14 @@ export default function StudentsPage() {
                   <span className="flex shrink-0 gap-1">
                     <button
                       type="button"
+                      data-testid={"portfolio-link-" + student.id}
+                      onClick={() => navigate("/students/" + student.id + "/portfolio")}
+                      className="rounded border border-slate-300 px-2 py-1 text-xs text-slate-600"
+                    >
+                      成长档案
+                    </button>
+                    <button
+                      type="button"
                       onClick={() => void handleRename(student)}
                       className="rounded border border-slate-300 px-2 py-1 text-xs text-slate-600"
                     >

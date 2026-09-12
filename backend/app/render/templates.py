@@ -28,6 +28,7 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from app.config import AppSettings
 from app.models import Essay
+from app.ranking import DEFAULT_STAR_THRESHOLDS, stars_from_score
 from app.schemas import ApiError
 
 # 中文优先字体栈：Windows / Linux 均可落到系统字体
@@ -36,6 +37,10 @@ FONT_STACK = (
     '"Source Han Sans SC", "WenQuanYi Micro Hei", sans-serif'
 )
 DEFAULT_CLASS_NAME = "班级"
+
+#: 星级字符（模板全局，见 ``build_environment``）。
+STAR_CHAR = "★"
+EMPTY_STAR_CHAR = "☆"
 
 TEMPLATES: tuple[dict[str, str], ...] = (
     {
@@ -57,8 +62,8 @@ TEMPLATES: tuple[dict[str, str], ...] = (
 DEFAULT_TEMPLATE = "elegant"
 VALID_TEMPLATES: tuple[str, ...] = tuple(item["key"] for item in TEMPLATES)
 
-VALID_ORDERS: tuple[str, ...] = ("student_no", "name")
-_RESERVED_ORDERS: dict[str, str] = {"score": "评分排序将在二期开放"}
+#: 成册排序：学号（默认）/ 姓名 / 佳作序（分数降序，v1.3 / FR-04 放开）。
+VALID_ORDERS: tuple[str, ...] = ("student_no", "name", "score")
 
 
 def repo_templates_dir() -> Path:
@@ -80,6 +85,10 @@ def build_environment(settings: AppSettings | None = None) -> Environment:
         lstrip_blocks=True,
     )
     env.globals["font_stack"] = FONT_STACK
+    # 星形字符只在这里定义一次：三套成册模板 + 海报 + 档案都要用，
+    # 写死在模板里就会出现"某套模板用了 ★、另一套用了 ☆"这种没法对齐的视觉回归。
+    env.globals["star_char"] = STAR_CHAR
+    env.globals["empty_star_char"] = EMPTY_STAR_CHAR
     return env
 
 
@@ -99,12 +108,10 @@ def resolve_order(order: str | None) -> str:
     """校验排序方式，返回合法值。
 
     Raises:
-        ApiError: 400 评分排序（二期）或不支持的排序方式。
+        ApiError: 400 不支持的排序方式。
     """
     if not order:
         return "student_no"
-    if order in _RESERVED_ORDERS:
-        raise ApiError(_RESERVED_ORDERS[order], code=400, status_code=400)
     if order not in VALID_ORDERS:
         raise ApiError(f"不支持的排序方式：{order}", code=400, status_code=400)
     return order
@@ -177,20 +184,34 @@ def split_paragraphs(text: str | None) -> list[str]:
     return paragraphs
 
 
+def _student_no_of(essay: Essay) -> str:
+    """学号（无学生信息时回空串，保证排序键永不为 None）。"""
+    return essay.student.student_no if essay.student is not None else ""
+
+
 def sort_essays(essays: Sequence[Essay], order: str) -> list[Essay]:
-    """按学号（默认）或姓名排序作文。"""
+    """按学号（默认）、姓名或佳作序（分数降序）排序作文。
+
+    佳作序里**未评分的排最后并按学号升序**：把没打分的稿子插到前面，等于让"老师还没看"
+    冒充"写得最好"，整册 PDF 一发家长群就会被发现。
+    """
     if order == "name":
         return sorted(
             essays,
             key=lambda essay: (
                 essay.student.name if essay.student is not None else "",
-                essay.student.student_no if essay.student is not None else "",
+                _student_no_of(essay),
             ),
         )
-    return sorted(
-        essays,
-        key=lambda essay: (essay.student.student_no if essay.student is not None else ""),
-    )
+    if order == "score":
+        return sorted(
+            essays,
+            key=lambda essay: (
+                -(essay.score if essay.score is not None else float("-inf")),
+                _student_no_of(essay),
+            ),
+        )
+    return sorted(essays, key=_student_no_of)
 
 
 # 投屏正文的取法（GAP-14）。上一轮为了消灭「投出空白页」，把投屏列表限定成 status=proofread，
@@ -219,9 +240,15 @@ def present_body(essay: Essay) -> tuple[str, bool]:
 
 
 def build_items(
-    essays: Sequence[Essay], *, include_draft_fallback: bool = False
+    essays: Sequence[Essay],
+    *,
+    include_draft_fallback: bool = False,
+    thresholds: Sequence[int] = DEFAULT_STAR_THRESHOLDS,
 ) -> list[dict[str, Any]]:
-    """把 ORM 作文序列映射为统一渲染条目（含评语位 ``comment``）。
+    """把 ORM 作文序列映射为统一渲染条目（含评语位 ``comment``、星级 ``stars``）。
+
+    ``stars`` 在这里算、不在模板里算：模板里写死阈值的话，老师改一次配置就要改三套
+    版式，而三套版式正是 PDF 回归的高发区（PRD v1.3 §6）。
 
     ``include_draft_fallback`` 只给投屏用：真为 ``True`` 时未定稿稿件回退到识别初稿并标
     ``is_draft``；成册与预览走默认 ``False``，**正文仍然只认 ``final_text``**（校对铁律）。
@@ -239,6 +266,9 @@ def build_items(
                 "is_draft": is_draft,
                 "is_selected": bool(essay.selected),
                 "comment": (essay.teacher_comment or "").strip(),
+                "score": essay.score,
+                "stars": stars_from_score(essay.score, thresholds),
+                "issue_no": (essay.issue.issue_no if essay.issue is not None else None),
             }
         )
     return items
@@ -261,8 +291,17 @@ def build_meta(
     generated_at: str,
     template: str,
     order: str,
+    book_title: str = "",
+    subtitle: str = "",
+    student_name: str = "",
+    hide_student_no: bool = False,
 ) -> dict[str, Any]:
-    """构造三套模板共用的元数据。"""
+    """构造三套模板共用的元数据。
+
+    ``book_title`` / ``subtitle`` 是 v1.3 给封面留的两个可覆盖文案位：默认值与模板里
+    原本硬写的字符串逐字相同，所以整册导出（一期数据）的输出保持字节级不变 ——
+    个人文集与精选海报要换封面标题时改这两个值，不必再为它们各写一套版式。
+    """
     return {
         "class_name": class_name,
         "issue_no": issue_no,
@@ -270,6 +309,10 @@ def build_meta(
         "generated_at": generated_at,
         "template": template,
         "order": order,
+        "book_title": book_title or f"第 {issue_no} 期作文集",
+        "subtitle": subtitle or f"周一起 {week_start_date}",
+        "student_name": student_name,
+        "hide_student_no": hide_student_no,
     }
 
 
@@ -279,11 +322,12 @@ def render_book_html(
     meta: dict[str, Any],
     *,
     settings: AppSettings | None = None,
+    thresholds: Sequence[int] = DEFAULT_STAR_THRESHOLDS,
 ) -> str:
     """渲染整册 HTML（与 PDF 同一套模板，所见即所得）。"""
     env = build_environment(settings)
     template_obj = env.get_template(f"{validate_template(template)}.html")
-    items = build_items(essays)
+    items = build_items(essays, thresholds=thresholds)
     context = {
         **meta,
         "items": items,
@@ -299,10 +343,108 @@ def render_single_html(
     meta: dict[str, Any],
     *,
     settings: AppSettings | None = None,
+    thresholds: Sequence[int] = DEFAULT_STAR_THRESHOLDS,
 ) -> str:
     """渲染单篇版式 HTML（打印张贴用）。"""
     env = build_environment(settings)
     template_obj = env.get_template(f"{validate_template(template)}.html")
-    item = build_items([essay])[0]
+    item = build_items([essay], thresholds=thresholds)[0]
     context = {**meta, "item": item, "items": [item], "mode": "single"}
+    return template_obj.render(**context)
+
+
+def _apply_meta_visibility(
+    items: list[dict[str, Any]], meta: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """按 ``meta.hide_student_no`` 抹掉学号（家长只读页：家长不需要知道学号编排）。
+
+    就地改渲染上下文而不是给模板加分支：模板里少一处条件，三套版式就少一处会漏改的地方。
+    """
+    if meta.get("hide_student_no"):
+        for item in items:
+            item["student_no"] = ""
+    return items
+
+
+#: 海报里每篇正文摘要的最大字数：超了就截断，页数不涨（单页是海报的硬要求）。
+MAX_POSTER_EXCERPT_CHARS = 120
+
+
+def first_paragraph_excerpt(
+    paragraphs: Sequence[str], limit: int = MAX_POSTER_EXCERPT_CHARS
+) -> str:
+    """取首段做海报摘要，超长截断加省略号。"""
+    text = paragraphs[0] if paragraphs else ""
+    if len(text) <= limit:
+        return text
+    return text[:limit].rstrip() + "……"
+
+
+def render_poster_html(
+    essays: Sequence[Essay],
+    meta: dict[str, Any],
+    *,
+    settings: AppSettings | None = None,
+    thresholds: Sequence[int] = DEFAULT_STAR_THRESHOLDS,
+) -> str:
+    """渲染"本周精选"海报（A4 单页，直接发家长群）。
+
+    刻意不复用三套成册模板：海报要的是"一篇一段摘要 + 评语 + 星级"，而成册模板是一篇
+    一页的全文 —— 两者对分页的诉求正好相反。
+    """
+    env = build_environment(settings)
+    template_obj = env.get_template("poster.html")
+    items = _apply_meta_visibility(build_items(essays, thresholds=thresholds), meta)
+    for item in items:
+        item["excerpt"] = first_paragraph_excerpt(item["paragraphs"])
+    context = {**meta, "items": items, "mode": "poster", "selected_count": len(items)}
+    return template_obj.render(**context)
+
+
+def render_share_html(
+    essays: Sequence[Essay],
+    template: str,
+    meta: dict[str, Any],
+    *,
+    settings: AppSettings | None = None,
+    thresholds: Sequence[int] = DEFAULT_STAR_THRESHOLDS,
+) -> str:
+    """渲染家长只读预览 HTML（与成册同一套模板、同一个正文口径）。
+
+    只认 ``final_text``：分享链接不能成为绕过校对的第二条出口（PRD v1.3 §9 回归锁）。
+    """
+    env = build_environment(settings)
+    template_obj = env.get_template(f"{validate_template(template)}.html")
+    items = _apply_meta_visibility(build_items(essays, thresholds=thresholds), meta)
+    context = {
+        **meta,
+        "items": items,
+        "selected_count": sum(1 for item in items if item["is_selected"]),
+        "mode": "share",
+    }
+    return template_obj.render(**context)
+
+
+def render_portfolio_html(
+    essays: Sequence[Essay],
+    template: str,
+    meta: dict[str, Any],
+    *,
+    settings: AppSettings | None = None,
+    thresholds: Sequence[int] = DEFAULT_STAR_THRESHOLDS,
+) -> str:
+    """渲染个人文集（成长档案导出）。
+
+    复用三套模板、只换 mode 与封面文案位：版式已经过真机与打印验证，
+    为档案再写一套版式等于把 GAP-09 的分页坑重新踩一遍。
+    """
+    env = build_environment(settings)
+    template_obj = env.get_template(f"{validate_template(template)}.html")
+    items = _apply_meta_visibility(build_items(essays, thresholds=thresholds), meta)
+    context = {
+        **meta,
+        "items": items,
+        "selected_count": sum(1 for item in items if item["is_selected"]),
+        "mode": "portfolio",
+    }
     return template_obj.render(**context)

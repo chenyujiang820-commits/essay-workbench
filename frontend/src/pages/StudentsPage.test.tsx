@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { RouterProvider, createMemoryRouter } from "react-router-dom";
+import { RouterProvider, createMemoryRouter, useLocation } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { api } from "../api/client";
@@ -120,5 +120,44 @@ describe("StudentsPage", () => {
     await waitFor(() => expect(api.deactivateStudent).toHaveBeenCalledWith(2));
     expect(await screen.findByText("李四 已停用。")).toBeTruthy();
     confirmSpy.mockRestore();
+  });
+});
+/** 探针路由：把当前 pathname 打进 DOM，断言的是跳转落点，不是「没报错」。 */
+function PathProbe() {
+  const location = useLocation();
+  return <div data-testid="path-probe">{location.pathname}</div>;
+}
+
+describe("StudentsPage 成长档案入口（v1.3 / FR-06）", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(api.listStudents).mockResolvedValue(students);
+  });
+
+  it("renders a portfolio entry on every student row", async () => {
+    renderStudents();
+    await screen.findByText("张三");
+
+    expect(screen.getByTestId("portfolio-link-1").textContent).toBe("成长档案");
+    expect(screen.getByTestId("portfolio-link-2").textContent).toBe("成长档案");
+  });
+
+  it("navigates to /students/:id/portfolio instead of submitting the add form", async () => {
+    const router = createMemoryRouter(
+      [
+        { path: "/students", element: <StudentsPage /> },
+        { path: "/students/:studentId/portfolio", element: <PathProbe /> },
+      ],
+      { initialEntries: ["/students"] },
+    );
+    render(<RouterProvider router={router} />);
+    await screen.findByText("李四");
+
+    fireEvent.click(screen.getByTestId("portfolio-link-2"));
+
+    await waitFor(() => expect(router.state.location.pathname).toBe("/students/2/portfolio"));
+    expect(screen.getByTestId("path-probe").textContent).toBe("/students/2/portfolio");
+    // 入口是 type=button：误提交「添加学生」表单这条退路要挡住。
+    expect(api.createStudent).not.toHaveBeenCalled();
   });
 });

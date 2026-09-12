@@ -24,6 +24,8 @@ from typing import Any
 import yaml
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.ranking import ranking_config as parse_ranking_config
+
 DEFAULT_DATA_DIR = "./data"
 DEFAULT_LOW_CONFIDENCE_THRESHOLD = 0.85
 
@@ -141,6 +143,14 @@ class AppSettings(BaseSettings):
             MIN_LOW_RESOLUTION_PENALTY,
             MAX_LOW_RESOLUTION_PENALTY,
         )
+
+    def ranking_config(self) -> dict[str, Any]:
+        """二期榜单配置（``app.yaml`` 的 ``ranking:`` 段），每次调用重读，改完刷新即生效。
+
+        解析与非法值回落全在 ``app.ranking.ranking_config`` 里（纯函数，可直接单测）；
+        这里只负责"从哪读"。配置写错**不让服务起不来**，与 worker 并发度同一套纪律。
+        """
+        return parse_ranking_config(self.app_config())
 
     @property
     def class_name(self) -> str:

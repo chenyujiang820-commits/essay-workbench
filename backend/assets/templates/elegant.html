@@ -27,6 +27,7 @@
       .cover h1 { font-size: 34pt; margin: 12mm 0 4mm; letter-spacing: 0.25em; font-weight: 600; }
       .cover .rule { width: 64mm; height: 1px; background: #94a3b8; margin: 10mm 0; }
       .cover .week { font-size: 13pt; color: #64748b; }
+      .cover .who { margin-top: 7mm; font-size: 13pt; letter-spacing: 0.16em; color: #475569; }
       .cover .foot { margin-top: 26mm; font-size: 10pt; color: #94a3b8; }
       /* 目录 */
       .toc { page-break-after: always; }
@@ -41,6 +42,10 @@
       }
       .toc li .t { color: #334155; }
       .toc li .n { color: #94a3b8; font-size: 11pt; }
+      /* 星级（v1.3 / FR-06）：只渲染星形、绝不渲染分数；stars=0 时整段不产生 DOM */
+      .stars { color: #b8a266; font-size: 9pt; letter-spacing: 0.06em; }
+      .toc li .stars { margin-left: 2mm; }
+      .essay .stars { margin-top: 6mm; text-align: center; }
       .toc .meta { margin: 0 0 5mm; font-size: 10.5pt; color: #94a3b8; }
       .flag {
         display: inline-block;
@@ -99,10 +104,13 @@
     {% if mode == 'single' %}
     <article class="essay single">
       <h2 class="title">{{ item.title or '未命名' }}{% if item.is_selected %}<span class="badge">精选</span>{% endif %}</h2>
-      <div class="author">{{ item.name }}{% if item.student_no %} · {{ item.student_no }}{% endif %}</div>
+      <div class="author">{{ item.name }}{% if item.student_no %} · {{ item.student_no }}{% endif %}{% if mode == 'portfolio' and item.issue_no %} · 第 {{ item.issue_no }} 期{% endif %}</div>
       <div class="body">
         {% for p in item.paragraphs %}<p>{{ p }}</p>{% else %}<p class="empty">（正文待补）</p>{% endfor %}
       </div>
+      {% if item.stars > 0 %}
+      <div class="stars">{% for s in range(item.stars) %}{{ star_char }}{% endfor %}{% for s in range(5 - item.stars) %}{{ empty_star_char }}{% endfor %}</div>
+      {% endif %}
       {% if item.comment %}
       <div class="comment">
         <div class="comment-label">教师评语</div>
@@ -114,10 +122,13 @@
     {% else %}
     <section class="cover">
       <div class="cls">{{ class_name }}</div>
-      <h1>第 {{ issue_no }} 期作文集</h1>
+      <h1>{{ book_title }}</h1>
       <div class="rule"></div>
-      <div class="week">周一起 {{ week_start_date }} · 共 {{ items | length }} 篇</div>
-      <div class="foot">生成于 {{ generated_at }}</div>
+      <div class="week">{{ subtitle }} · 共 {{ items | length }} 篇</div>
+      {% if mode == 'portfolio' and student_name and student_name not in book_title %}
+      <div class="who">{{ student_name }} 的成长文集</div>
+      {% endif %}
+      <div class="foot">生成于 {{ generated_at }}{% if mode == 'share' and expires_at %} · 本链接有效期至 {{ expires_at }}{% endif %}</div>
     </section>
 
     <section class="toc">
@@ -126,7 +137,7 @@
       <ol>
         {% for item in items %}
         <li>
-          <span class="t">{{ item.name }}{% if item.is_selected %}<span class="badge">精选</span>{% endif %}{% if item.comment %}<span class="flag">评语</span>{% endif %}</span>
+          <span class="t">{{ item.name }}{% if item.is_selected %}<span class="badge">精选</span>{% endif %}{% if item.comment %}<span class="flag">评语</span>{% endif %}{% if item.stars > 0 %}<span class="stars">{% for s in range(item.stars) %}{{ star_char }}{% endfor %}{% for s in range(5 - item.stars) %}{{ empty_star_char }}{% endfor %}</span>{% endif %}</span>
           <span class="n">{{ item.title or '未命名' }}</span>
         </li>
         {% endfor %}
@@ -136,10 +147,13 @@
     {% for item in items %}
     <article class="essay">
       <h2 class="title">{{ item.title or '未命名' }}{% if item.is_selected %}<span class="badge">精选</span>{% endif %}</h2>
-      <div class="author">{{ item.name }}{% if item.student_no %} · {{ item.student_no }}{% endif %}</div>
+      <div class="author">{{ item.name }}{% if item.student_no %} · {{ item.student_no }}{% endif %}{% if mode == 'portfolio' and item.issue_no %} · 第 {{ item.issue_no }} 期{% endif %}</div>
       <div class="body">
         {% for p in item.paragraphs %}<p>{{ p }}</p>{% else %}<p class="empty">（正文待补）</p>{% endfor %}
       </div>
+      {% if item.stars > 0 %}
+      <div class="stars">{% for s in range(item.stars) %}{{ star_char }}{% endfor %}{% for s in range(5 - item.stars) %}{{ empty_star_char }}{% endfor %}</div>
+      {% endif %}
       {% if item.comment %}
       <div class="comment">
         <div class="comment-label">教师评语</div>

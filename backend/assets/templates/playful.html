@@ -41,6 +41,7 @@
         color: #ea580c;
       }
       .cover .week { font-size: 13pt; color: #64748b; }
+      .cover .who { margin-top: 6mm; font-size: 14pt; color: #92400e; }
       .cover .foot { margin-top: 20mm; font-size: 10pt; color: #94a3b8; }
       .toc { page-break-after: always; }
       .toc h2 {
@@ -60,6 +61,19 @@
         margin-bottom: 3mm;
       }
       .toc li .n { color: #0f766e; }
+      /* 星级（v1.3）：只认后端下发的 item.stars，暖色圆角徽章里只放实心星；未评分不产生 DOM */
+      .stars {
+        display: inline-block;
+        margin-left: 2mm;
+        padding: 0.3mm 2.8mm;
+        border-radius: 999px;
+        background: #fef3c7;
+        color: #b45309;
+        font-size: 9.5pt;
+        letter-spacing: 0.04em;
+        vertical-align: middle;
+      }
+      .essay .stars { margin-top: 4mm; }
       .toc .meta { margin: 2mm 0 0; font-size: 10.5pt; color: #0f766e; }
       .flag {
         display: inline-block;
@@ -142,10 +156,13 @@
         <div class="bar">
           <h2 class="title">{{ item.title or '未命名' }}{% if item.is_selected %}<span class="badge">★ 精选</span>{% endif %}</h2>
         </div>
-        <div class="chip">{{ item.name }}{% if item.student_no %} · {{ item.student_no }}{% endif %}</div>
+        <div class="chip">{{ item.name }}{% if item.student_no %} · {{ item.student_no }}{% endif %}{% if mode == 'portfolio' and item.issue_no %} · 第 {{ item.issue_no }} 期{% endif %}</div>
         <div class="body">
           {% for p in item.paragraphs %}<p>{{ p }}</p>{% else %}<p class="empty">（正文待补）</p>{% endfor %}
         </div>
+        {% if item.stars > 0 %}
+        <span class="stars">{% for s in range(item.stars) %}{{ star_char }}{% endfor %}</span>
+        {% endif %}
         {% if item.comment %}
         <div class="comment">
           <p class="comment-text">🌟 老师想说：{{ item.comment }}</p>
@@ -157,9 +174,12 @@
     {% else %}
     <section class="cover">
       <div class="cls">{{ class_name }}</div>
-      <h1>第 {{ issue_no }} 期作文集</h1>
-      <div class="week">周一起 {{ week_start_date }} · 共 {{ items | length }} 篇</div>
-      <div class="foot">生成于 {{ generated_at }}</div>
+      <h1>{{ book_title }}</h1>
+      <div class="week">{{ subtitle }} · 共 {{ items | length }} 篇</div>
+{% if mode == 'portfolio' and student_name and student_name not in book_title %}
+      <div class="who">{{ student_name }} 的成长文集</div>
+      {% endif %}
+      <div class="foot">生成于 {{ generated_at }}{% if mode == 'share' and expires_at %} · 本链接有效期至 {{ expires_at }}{% endif %}</div>
     </section>
 
     <section class="toc">
@@ -168,7 +188,7 @@
       <ul>
         {% for item in items %}
         <li>
-          <span>{{ item.name }}{% if item.is_selected %} <span class="badge">★ 精选</span>{% endif %}{% if item.comment %}<span class="flag">评语</span>{% endif %}</span>
+          <span>{{ item.name }}{% if item.is_selected %} <span class="badge">★ 精选</span>{% endif %}{% if item.comment %}<span class="flag">评语</span>{% endif %}{% if item.stars > 0 %}<span class="stars">{% for s in range(item.stars) %}{{ star_char }}{% endfor %}</span>{% endif %}</span>
           <span class="n">{{ item.title or '未命名' }}</span>
         </li>
         {% endfor %}
@@ -181,10 +201,13 @@
         <div class="bar">
           <h2 class="title">{{ item.title or '未命名' }}{% if item.is_selected %}<span class="badge">★ 精选</span>{% endif %}</h2>
         </div>
-        <div class="chip">{{ item.name }}{% if item.student_no %} · {{ item.student_no }}{% endif %}</div>
+        <div class="chip">{{ item.name }}{% if item.student_no %} · {{ item.student_no }}{% endif %}{% if mode == 'portfolio' and item.issue_no %} · 第 {{ item.issue_no }} 期{% endif %}</div>
         <div class="body">
           {% for p in item.paragraphs %}<p>{{ p }}</p>{% else %}<p class="empty">（正文待补）</p>{% endfor %}
         </div>
+        {% if item.stars > 0 %}
+        <span class="stars">{% for s in range(item.stars) %}{{ star_char }}{% endfor %}</span>
+        {% endif %}
         {% if item.comment %}
         <div class="comment">
           <p class="comment-text">🌟 老师想说：{{ item.comment }}</p>

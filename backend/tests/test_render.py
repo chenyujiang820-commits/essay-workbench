@@ -8,12 +8,13 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import sys
 from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
-from app.models import Essay, Photo, Student, utcnow_iso
+from app.models import Essay, Issue, Photo, Student, utcnow_iso
 from app.render import templates as tpl
 from app.schemas import ApiError
 from httpx import AsyncClient
@@ -35,6 +36,7 @@ def make_essay(
     text: str = "第一段文字\n第二段文字",
     selected: int = 0,
     comment: str | None = None,
+    score: float | None = None,
     photos: Sequence[str] | None = None,
     status: str = "proofread",
 ) -> Essay:
@@ -49,6 +51,7 @@ def make_essay(
         low_confidence=0,
         selected=selected,
         teacher_comment=comment,
+        score=score,
         created_at=utcnow_iso(),
     )
     if photos:
@@ -117,17 +120,36 @@ def test_sort_essays_by_student_no_and_name() -> None:
     assert [essay.student.name for essay in by_name] == ["张三", "李四"]
 
 
-def test_resolve_order_rejects_score() -> None:
+def test_resolve_order_accepts_score_order() -> None:
+    """一期把 score 当"二期预留"直接 400；二期（v1.3 / FR-04）放开为真实排序。"""
     assert tpl.resolve_order(None) == "student_no"
     assert tpl.resolve_order("name") == "name"
-
-    with pytest.raises(ApiError) as excinfo:
-        tpl.resolve_order("score")
-    assert excinfo.value.status_code == 400
-    assert "二期" in excinfo.value.message
+    assert tpl.resolve_order("score") == "score"
+    assert "score" in tpl.VALID_ORDERS
 
     with pytest.raises(ApiError):
         tpl.resolve_order("unknown")
+
+
+def test_sort_essays_by_score_puts_unscored_last() -> None:
+    """佳作序：分数降序，**未评分排最后并按学号升序**。"""
+    low = make_essay(student_no="S001", name="甲", score=62.0)
+    high = make_essay(student_no="S002", name="乙", score=95.0)
+    missing_b = make_essay(student_no="S004", name="丁", score=None)
+    missing_a = make_essay(student_no="S003", name="丙", score=None)
+
+    ordered = tpl.sort_essays([missing_a, low, missing_b, high], "score")
+    assert [essay.student.name for essay in ordered] == ["乙", "甲", "丙", "丁"]
+
+
+def test_build_items_carries_stars() -> None:
+    """星级由 build_items 按阈值算好下发，模板只负责渲染。"""
+    items = tpl.build_items([make_essay(score=95.0), make_essay(score=None, student_no="S002")])
+    assert [item["stars"] for item in items] == [5, 0]
+    assert [item["score"] for item in items] == [95.0, None]
+
+    custom = tpl.build_items([make_essay(score=95.0)], thresholds=(96, 97, 98, 99))
+    assert custom[0]["stars"] == 1
 
 
 def test_validate_template_rejects_unknown() -> None:
@@ -171,6 +193,11 @@ def test_build_items_carries_comment(template: str) -> None:
         "comment",
         # rev.4 投屏改造新增 is_draft；本断言仍守住「不多不少」的键集合。
         "is_draft",
+        # v1.3（二期）新增两键：评分与后端算好的星级。
+        "score",
+        "stars",
+        # v1.3：档案/家长共用同一份条目，期数由 build_items 透出（模板不再自己找关系）。
+        "issue_no",
     }
     # 默认路径（成册/预览）绝不把未定稿稿件的识别初稿混进来。
     assert [item["is_draft"] for item in items] == [False, False]
@@ -191,6 +218,123 @@ def test_no_comment_renders_no_comment_dom(template: str) -> None:
             assert 'class="comment-text"' not in rendered
             assert 'class="comment-label"' not in rendered
             assert 'class="flag"' not in rendered
+
+
+# ---------------------------------------------------------------------------
+# v1.3（二期）：封面文案位 / 星级 / share 与 portfolio 模式
+# ---------------------------------------------------------------------------
+# 一期封面写死「第 N 期作文集」「周一起 X」，二期改成可覆盖的文案位；但**默认值下必须
+# 逐字不变** —— PDF 版式是一期真机验证过的基线，任何一处文字漂移都算回归（PRD v1.3 §9）。
+COVER_DEFAULT_LINES: tuple[str, ...] = ("<h1>第 3 期作文集</h1>", "周一起 2026-09-07 · 共 2 篇")
+
+
+def make_meta_v13(template: str, **overrides: object) -> dict[str, object]:
+    """带二期文案位/可见性覆盖的 meta（默认值与一期完全一致）。"""
+    base: dict[str, object] = {
+        "class_name": "高一(1)班",
+        "issue_no": 3,
+        "week_start_date": "2026-09-07",
+        "generated_at": "2026-09-10 20:00",
+        "template": template,
+        "order": "student_no",
+    }
+    base.update(overrides)
+    return tpl.build_meta(**base)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("template", TEMPLATES_ALL)
+def test_cover_defaults_render_exactly_as_phase_one(template: str) -> None:
+    html = tpl.render_book_html(
+        [make_essay(), make_essay(student_no="S002", name="李四")], template, make_meta(template)
+    )
+    for line in COVER_DEFAULT_LINES:
+        assert line in html
+
+
+@pytest.mark.parametrize("template", TEMPLATES_ALL)
+def test_cover_honours_meta_overrides(template: str) -> None:
+    html = tpl.render_book_html(
+        [make_essay()],
+        template,
+        make_meta_v13(
+            template,
+            book_title="张三 的作文成长档案",
+            subtitle="高一(1)班 · 第 1~3 期",
+        ),
+    )
+    assert "<h1>张三 的作文成长档案</h1>" in html
+    assert "高一(1)班 · 第 1~3 期 · 共 1 篇" in html
+    assert COVER_DEFAULT_LINES[0] not in html
+
+
+@pytest.mark.parametrize("template", TEMPLATES_ALL)
+def test_stars_render_only_when_scored(template: str) -> None:
+    """星跟着后端算出的 stars 出：未评分既不出星、也不出星级容器（空容器会白占一行版式）。"""
+    scored = tpl.render_book_html([make_essay(score=82.0)], template, make_meta(template))
+    assert tpl.STAR_CHAR * 4 in scored
+    if template == "playful":
+        # 活泼版只给实心星（暖色徽章），素雅/正式版补足空心星。
+        assert tpl.EMPTY_STAR_CHAR not in scored
+    else:
+        assert tpl.EMPTY_STAR_CHAR in scored
+        # 满分不补足空心星：满排五颗就够，多一个空心符号反而像在提示"还差一颗"。
+        top = tpl.render_book_html([make_essay(score=95.0)], template, make_meta(template))
+        assert tpl.STAR_CHAR * 5 in top
+
+    unscored = tpl.render_book_html([make_essay()], template, make_meta(template))
+    assert tpl.STAR_CHAR not in unscored
+    assert 'class="stars"' not in unscored
+
+
+@pytest.mark.parametrize("template", TEMPLATES_ALL)
+def test_stars_line_does_not_impersonate_comment_label(template: str) -> None:
+    """有星级、无评语时不得出现任何评语特征词：formal 的星级行曾写作「师评星级」，
+    它会把「无评语即无评语 DOM」这条回归判定污染成假绿（CSS 注释同理）。"""
+    html = tpl.render_book_html([make_essay(score=95.0)], template, make_meta(template))
+    assert not any(keyword in html for keyword in COMMENT_KEYWORDS)
+
+
+@pytest.mark.parametrize("template", TEMPLATES_ALL)
+def test_share_mode_blanks_student_no_and_shows_expiry(template: str) -> None:
+    """家长只读预览：学号被抹掉、封面标出链接有效期（数据最小化的两条落点都在模板里）。"""
+    meta = make_meta_v13(
+        template,
+        hide_student_no=True,
+        book_title="张三 的作文",
+        subtitle="高一(1)班 · 周一起 2026-09-07",
+    )
+    meta["expires_at"] = "2026-09-24T08:00:00+00:00"
+    html = tpl.render_share_html([make_essay()], template, meta)
+    assert "S001" not in html
+    assert "张三" in html
+    assert "有效期至" in html
+
+
+@pytest.mark.parametrize("template", TEMPLATES_ALL)
+def test_portfolio_mode_marks_student_and_per_essay_issue(template: str) -> None:
+    """个人文集：正文行标出该篇来自哪一期；封面学生名只在标题没带上时才补一行。"""
+    essay = make_essay(score=82.0)
+    essay.issue = Issue(issue_no=5, week_start_date="2026-09-07")
+
+    html = tpl.render_portfolio_html(
+        [essay],
+        template,
+        make_meta_v13(
+            template,
+            student_name="张三",
+            book_title="高一(1)班 · 作文成长档案",
+            subtitle="第 5 期",
+        ),
+    )
+    assert re.search("张三[^<]*第 5 期", html), "档案的正文行要标出该篇来自哪一期"
+    assert "张三 的成长文集" in html
+
+    merged = tpl.render_portfolio_html(
+        [essay],
+        template,
+        make_meta_v13(template, student_name="张三", book_title="张三 的作文成长档案"),
+    )
+    assert "的成长文集" not in merged
 
 
 @pytest.mark.parametrize("template", TEMPLATES_ALL)
@@ -352,6 +496,7 @@ async def insert_essay(
     status: str = "proofread",
     selected: int = 0,
     comment: str | None = None,
+    score: float | None = None,
 ) -> int:
     async with session_factory() as session:
         essay = Essay(
@@ -363,6 +508,7 @@ async def insert_essay(
             low_confidence=0,
             selected=selected,
             teacher_comment=comment,
+            score=score,
             created_at=utcnow_iso(),
         )
         session.add(essay)
@@ -616,17 +762,27 @@ async def test_export_blocked_when_not_all_proofread(
     assert "未校对" in response.json()["message"]
 
 
-async def test_export_score_order_returns_400(
+async def test_preview_orders_by_score_with_unscored_last(
     client: AsyncClient,
     auth_headers: dict[str, str],
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    issue_id, _, _ = await seed_two_essays(client, auth_headers, session_factory, issue_no=8)
-    response = await client.post(
-        f"/api/exports/{issue_id}", json={"template": "elegant", "order": "score"}, headers=auth_headers
+    """``order=score`` 走真库真 HTTP：佳作序把未评分排到最后（v1.3 / FR-04）。"""
+    issue_id = await create_issue(client, auth_headers, 8)
+    student_a = await insert_student(session_factory, "S001", "甲未评分")
+    student_b = await insert_student(session_factory, "S002", "乙九十三")
+    await insert_essay(
+        session_factory, issue_id=issue_id, student_id=student_a, title="无分之作", score=None
     )
-    assert response.status_code == 400
-    assert "二期" in response.json()["message"]
+    await insert_essay(
+        session_factory, issue_id=issue_id, student_id=student_b, title="高分之作", score=93.0
+    )
+    response = await client.get(
+        f"/api/exports/{issue_id}/preview?order=score", headers=auth_headers
+    )
+    assert response.status_code == 200
+    html = response.text
+    assert html.index("乙九十三") < html.index("甲未评分")
 
 
 async def test_single_export_requires_proofread(

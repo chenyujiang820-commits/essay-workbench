@@ -47,3 +47,12 @@ async def export_book(html: str) -> bytes:
 async def export_single(html: str) -> bytes:
     """单篇版式导出（打印张贴用，不带页码页脚）。"""
     return await render_pdf(html, with_page_number=False)
+
+
+async def export_poster(html: str) -> bytes:
+    """精选海报导出（A4 单页，发家长群）。
+
+    与单篇版式一样不带页码页脚，但语义不同：海报的"单页"是**产品硬要求**，
+    由模板把正文摘要截断来保证，而不是靠分页；有页脚反而说明它超页了。
+    """
+    return await render_pdf(html, with_page_number=False)

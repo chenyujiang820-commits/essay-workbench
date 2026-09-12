@@ -132,23 +132,78 @@ async def test_patch_title_is_trimmed_and_rejects_overlong(
     assert too_long.status_code == 422
 
 
-async def test_patch_requires_non_empty_final_text(
+async def test_patch_without_final_text_keeps_existing_body(
     client: AsyncClient,
     auth_headers: dict[str, str],
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    """钉住一条容易踩到的约束：这个端点不能只改标题。
+    """v1.3 改口径：``final_text`` 不传即不改。
 
-    final_text 为空一律 400，所以改标题必须连着定稿文字一起提交（校对页本来就是
-    整体保存）。若想支持"只改标题"，需要新增字段语义，而不是把这里放宽。
+    一期这条测试钉的是"不带上正文就 400"，因为那时 PATCH 只做正文+标题+定稿三件事。
+    二期要在校对页之外（看板、三榜）就地写评语/评分，若仍强迫前端回写整篇正文，
+    "只改个分数"就会顺手动到定稿位 —— 所以这里新增三态语义，而不是让每个入口先去 GET 详情。
     """
     essay_id = await make_essay(client, auth_headers, session_factory)
+    first = await client.patch(
+        f"/api/essays/{essay_id}",
+        json={"final_text": FINAL_TEXT, "proofread": True},
+        headers=auth_headers,
+    )
+    assert first.status_code == 200, first.text
+
     response = await client.patch(
         f"/api/essays/{essay_id}", json={"title": "春天"}, headers=auth_headers
     )
-    assert response.status_code == 400
-    assert response.json()["message"] == "定稿文字不能为空"
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    assert data["title"] == "春天"
+    assert data["final_text"] == FINAL_TEXT
+    assert data["status"] == "proofread"
 
+
+async def test_patch_score_only_does_not_touch_body(
+    client: AsyncClient,
+    auth_headers: dict[str, str],
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """只提交评分：正文与定稿状态都原样不动，星级一并回读（前端不再回写正文）。"""
+    essay_id = await make_essay(client, auth_headers, session_factory)
+    await client.patch(
+        f"/api/essays/{essay_id}",
+        json={"final_text": FINAL_TEXT, "proofread": True},
+        headers=auth_headers,
+    )
+
+    response = await client.patch(
+        f"/api/essays/{essay_id}", json={"score": 92}, headers=auth_headers
+    )
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    assert data["final_text"] == FINAL_TEXT
+    assert data["score"] == 92
+    assert data["stars"] == 5
+
+
+async def test_patch_blank_final_text_is_still_rejected(
+    client: AsyncClient,
+    auth_headers: dict[str, str],
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """放宽的是"不传"，不是"传空"：定稿位永远不允许被清空（成册只认 final_text）。"""
+    essay_id = await make_essay(client, auth_headers, session_factory)
+    await client.patch(
+        f"/api/essays/{essay_id}",
+        json={"final_text": FINAL_TEXT, "proofread": True},
+        headers=auth_headers,
+    )
+
+    blank = await client.patch(
+        f"/api/essays/{essay_id}", json={"final_text": "   "}, headers=auth_headers
+    )
+    assert blank.status_code == 400
+    assert blank.json()["message"] == "定稿文字不能为空"
+    kept = await client.get(f"/api/essays/{essay_id}", headers=auth_headers)
+    assert kept.json()["data"]["final_text"] == FINAL_TEXT
 
 # ---------------------------------------------------------------------------
 # POST /essays/{id}/recognize（AC-6）

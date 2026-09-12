@@ -48,6 +48,10 @@ function essay(id: number, status: string, name: string, title: string): EssaySu
     low_resolution_count: 0,
     created_at: "2026-09-07T00:00:00+00:00",
     proofread_at: null,
+    teacher_comment: null,
+    score: null,
+    stars: 0,
+    selected: 0,
   };
 }
 
@@ -93,14 +97,21 @@ describe("BookPage", () => {
     expect(screen.queryByTestId("export-hint")).toBeNull();
   });
 
-  it("greys out the score order option (二期)", async () => {
-    vi.mocked(api.listIssueEssays).mockResolvedValue([essay(1, "proofread", "张三", "春天")]);
+  it("orders the book by score once the teacher picks it", async () => {
+    // 一期这个选项是灰的占位（写着"二期开放"）；v1.3 起它真的会把 order=score 发出去。
+    vi.mocked(api.listIssueEssays).mockResolvedValue([
+      essay(1, "proofread", "张三", "春天"),
+      essay(2, "proofread", "李四", "秋天"),
+    ]);
     renderBook();
 
     const select = (await screen.findByTestId("order-select")) as HTMLSelectElement;
     const scoreOption = Array.from(select.options).find((option) => option.value === "score");
     expect(scoreOption).toBeTruthy();
-    expect(scoreOption?.disabled).toBe(true);
+    expect(scoreOption?.disabled).toBe(false);
+
+    fireEvent.change(select, { target: { value: "score" } });
+    await waitFor(() => expect(api.fetchExportPreview).toHaveBeenCalledWith(1, { template: "elegant", order: "score" }));
   });
 
   it("shows a retryable error state when the preview fails to load", async () => {

@@ -177,11 +177,9 @@ export default function BookPage() {
             >
               <option value="student_no">按学号</option>
               <option value="name">按姓名</option>
-              <option value="score" disabled title="评分排序将在二期开放">
-                按评分（二期开放）
-              </option>
+              <option value="score">按评分（佳作优先）</option>
             </select>
-            <p className="mt-1 text-xs text-slate-400">评分排序将在二期开放。</p>
+            <p className="mt-1 text-xs text-slate-400">按评分排序时分数高的在前，未评分的排最后（同分按学号）。</p>
 
             <button
               type="button"

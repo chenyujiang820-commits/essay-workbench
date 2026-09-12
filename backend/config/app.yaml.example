@@ -18,3 +18,32 @@ auth:
   password_hash: "pbkdf2_sha256$200000$REPLACE_SALT_HEX$REPLACE_DIGEST_HEX"
   token_secret: "REPLACE_WITH_RANDOM_SECRET"
   token_ttl_seconds: 604800   # 7 天
+
+# ---------------------------------------------------------------------------
+# 二期（v1.3）：表彰与榜单
+#
+# 改完直接刷新页面即生效（每次请求重读本文件），不需要重启服务。
+# 任何一条写错都不会让榜消失：非法值一律回落默认，回落细节见 app/ranking.py。
+# ---------------------------------------------------------------------------
+ranking:
+  # 星级阈值：四档分数边界（4 颗星之间的 4 个切点），必须严格递增且在 0~100 内。
+  # 默认 60/70/80/90 是待老师核对的工程默认值（PRD v1.3 Q25），不是教学结论。
+  stars_from_score: [60, 70, 80, 90]
+
+  work:
+    # 佳作榜：本周绝对水平。只认显式关闭（enabled: false），其余都算开启。
+    enabled: true
+    # teacher = 只在工作台里出现；public = 允许出现在对外材料上。
+    # 注意：目前没有任何免鉴权接口会下发榜单，家长页只出星级，所以这个开关
+    #       只决定工作台内的遮罩（分数是否直接可读）。
+    visibility: teacher
+
+  progress:
+    # 进步榜：与"最近一个有分的更早期数"比较；一期只交一篇也可能上榜。
+    enabled: true
+    visibility: public
+
+  star:
+    # 星级榜：只出星级，永不出名次与分数（后端就不返回 rank/score，前端无从显示）。
+    enabled: true
+    visibility: public

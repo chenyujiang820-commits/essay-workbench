@@ -25,7 +25,7 @@ from sqlalchemy.orm import selectinload
 from app.auth import require_auth
 from app.config import AppSettings
 from app.db import get_session
-from app.models import Essay, Issue
+from app.models import Essay, Issue, Student
 from app.render import pdf as pdf_render
 from app.render import templates as tpl
 from app.schemas import (
@@ -76,6 +76,11 @@ def _build_meta(
     )
 
 
+def _thresholds(settings: AppSettings) -> list[int]:
+    """当前星级阈值（二期：模板要渲染星级，阈值只在后端算一次）。"""
+    return list(settings.ranking_config()["thresholds"])
+
+
 def _pdf_response(data: bytes, filename: str) -> Response:
     """构造 PDF 下载响应（ASCII 兜底 + RFC 5987 中文文件名）。"""
     disposition = (
@@ -122,6 +127,7 @@ async def preview_book(
         template_key,
         _build_meta(settings, issue, template_key, order_key),
         settings=settings,
+        thresholds=_thresholds(settings),
     )
     return HTMLResponse(content=html)
 
@@ -213,6 +219,7 @@ async def create_export(
         template_key,
         _build_meta(settings, issue, template_key, order_key),
         settings=settings,
+        thresholds=_thresholds(settings),
     )
     data = await pdf_render.export_book(html)
     return _pdf_response(data, f"第{issue.issue_no}期作文集.pdf")
@@ -253,3 +260,126 @@ async def create_single_export(
     )
     data = await pdf_render.export_single(html)
     return _pdf_response(data, f"第{issue.issue_no}期-{name}-{title}.pdf")
+
+
+@router.post("/{issue_id}/poster")
+async def create_poster(
+    issue_id: int,
+    request: Request,
+    session: SessionDep,
+    _auth: AuthDep,
+) -> Response:
+    """导出"本周精选"海报 PDF（A4 **单页**，直接发家长群，FR-05）。
+
+    只出 ``selected=1`` 的稿件 —— 精选的前置条件是已定稿（由 selection 端点写入时守住），
+    所以这里不再二次判定状态，但也不给未勾选的稿件留口子。
+
+    Raises:
+        ApiError: 400 该期还没有勾选精选作文；404 期数不存在。
+    """
+    settings: AppSettings = request.app.state.settings
+    issue = await _load_issue(session, issue_id)
+    essays = await _load_essays(session, issue_id)
+    chosen = [essay for essay in essays if int(essay.selected or 0)]
+    if not chosen:
+        raise ApiError(
+            "本期还没有勾选精选作文，请先在作文看板勾选（1~10 篇）",
+            code=400,
+            status_code=400,
+        )
+
+    ordered = tpl.sort_essays(chosen, "score")
+    meta = tpl.build_meta(
+        class_name=tpl.class_name_from_settings(settings),
+        issue_no=issue.issue_no,
+        week_start_date=issue.week_start_date,
+        generated_at=datetime.now().strftime("%Y-%m-%d %H:%M"),
+        template="poster",
+        order="score",
+        book_title=f"第 {issue.issue_no} 期 · 本周精选",
+        subtitle=f"{tpl.class_name_from_settings(settings)} · 共 {len(ordered)} 篇",
+    )
+    html = tpl.render_poster_html(
+        ordered, meta, settings=settings, thresholds=_thresholds(settings)
+    )
+    data = await pdf_render.export_poster(html)
+    return _pdf_response(data, f"第{issue.issue_no}期本周精选.pdf")
+
+
+@router.post("/students/{student_id}/portfolio")
+async def create_portfolio_export(
+    student_id: int,
+    request: Request,
+    session: SessionDep,
+    _auth: AuthDep,
+    template: Annotated[str, Query()] = tpl.DEFAULT_TEMPLATE,
+    order: Annotated[str, Query()] = "issue_no",
+) -> Response:
+    """导出单生"个人文集 PDF"（成长档案的期末交付物，FR-06）。
+
+    复用三套成册模板，只换封面文案位；正文仍只取 ``final_text``（未定稿不进档案，
+    自然也不会进文集）。
+
+    Raises:
+        ApiError: 400 该生暂无已定稿作文 / 参数非法；404 学生不存在。
+    """
+    settings: AppSettings = request.app.state.settings
+    student = await session.get(Student, student_id)
+    if student is None:
+        raise ApiError("学生不存在", code=404, status_code=404)
+
+    stmt = (
+        select(Essay)
+        .where(Essay.student_id == student_id, Essay.status == "proofread")
+        .options(selectinload(Essay.student), selectinload(Essay.issue))
+    )
+    essays = list((await session.execute(stmt)).scalars().all())
+    if not essays:
+        raise ApiError(
+            f"{student.name}还没有已定稿的作文，无法导出个人文集",
+            code=400,
+            status_code=400,
+        )
+
+    template_key = tpl.validate_template(template)
+    # 档案默认按期号倒序（最近的写在最前面），也可切回学号/姓名/佳作序。
+    ordered = _sort_for_portfolio(essays, order)
+    newest = max((essay.issue.issue_no for essay in ordered if essay.issue), default=0)
+    oldest = min((essay.issue.issue_no for essay in ordered if essay.issue), default=0)
+    meta = tpl.build_meta(
+        class_name=tpl.class_name_from_settings(settings),
+        issue_no=newest,
+        week_start_date=ordered[0].issue.week_start_date if ordered[0].issue else "",
+        generated_at=datetime.now().strftime("%Y-%m-%d %H:%M"),
+        template=template_key,
+        order=order,
+        student_name=student.name,
+        book_title=f"{student.name} 的作文成长档案",
+        subtitle=f"{tpl.class_name_from_settings(settings)} · 第 {oldest}~{newest} 期",
+    )
+    html = tpl.render_portfolio_html(
+        ordered,
+        template_key,
+        meta,
+        settings=settings,
+        thresholds=_thresholds(settings),
+    )
+    data = await pdf_render.export_book(html)
+    return _pdf_response(data, f"{student.name}的作文成长档案.pdf")
+
+
+def _sort_for_portfolio(essays: list[Essay], order: str) -> list[Essay]:
+    """文集排序：``issue_no`` 走"期号倒序 + 学号升序"，其余交给成册同一套排序。
+
+    刻意复用 ``tpl.sort_essays``：文集和整册的"学号/姓名/佳作序"必须是同一个实现，
+    否则同一个班在两处看到不同的先后顺序，又是一次"两套口径"（GAP-14 的根因）。
+    """
+    if order != "issue_no":
+        return tpl.sort_essays(essays, tpl.resolve_order(order))
+    return sorted(
+        essays,
+        key=lambda essay: (
+            -(int(essay.issue.issue_no) if essay.issue is not None else 0),
+            essay.student.student_no if essay.student is not None else "",
+        ),
+    )

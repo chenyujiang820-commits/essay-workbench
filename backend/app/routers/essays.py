@@ -24,6 +24,7 @@ from app.config import AppSettings
 from app.db import get_session
 from app.images import ensure_size, image_size, resolve_extension
 from app.models import Essay, Issue, Photo, RecognitionTask, Student, utcnow_iso
+from app.ranking import MAX_SELECTED_PER_ISSUE
 from app.schemas import (
     ApiError,
     Envelope,
@@ -166,13 +167,17 @@ async def upload_essay(
 
 @router.get("/issues/{issue_id}/essays", response_model=Envelope[list[EssayOut]])
 async def list_issue_essays(
-    issue_id: int, session: SessionDep, _auth: AuthDep
+    issue_id: int,
+    request: Request,
+    session: SessionDep,
+    _auth: AuthDep,
 ) -> dict[str, Any]:
     """列出某期全部作文（按学号升序）。
 
     Raises:
         ApiError: 404 期数不存在。
     """
+    settings: AppSettings = request.app.state.settings
     issue = await session.get(Issue, issue_id)
     if issue is None:
         raise ApiError("期数不存在", code=404, status_code=404)
@@ -185,11 +190,14 @@ async def list_issue_essays(
         .order_by(Student.student_no.asc())
     )
     essays = (await session.execute(stmt)).scalars().all()
-    return envelope([essay_to_out(essay) for essay in essays])
+    thresholds = settings.ranking_config()["thresholds"]
+    return envelope([essay_to_out(essay, thresholds) for essay in essays])
 
 
 @router.get("/essays/{essay_id}", response_model=Envelope[EssayDetail])
-async def get_essay(essay_id: int, session: SessionDep, _auth: AuthDep) -> dict[str, Any]:
+async def get_essay(
+    essay_id: int, request: Request, session: SessionDep, _auth: AuthDep
+) -> dict[str, Any]:
     """作文详情：含各 photo 的 engine1_text/engine2_text/diff_json 与状态。
 
     Raises:
@@ -198,27 +206,40 @@ async def get_essay(essay_id: int, session: SessionDep, _auth: AuthDep) -> dict[
     essay = await _load_essay(session, essay_id)
     if essay is None:
         raise ApiError("作文不存在", code=404, status_code=404)
-    return envelope(essay_to_detail(essay).model_dump())
+    thresholds = request.app.state.settings.ranking_config()["thresholds"]
+    return envelope(essay_to_detail(essay, thresholds).model_dump())
 
 
 @router.patch("/essays/{essay_id}", response_model=Envelope[EssayDetail])
 async def update_essay(
-    essay_id: int, payload: EssayUpdate, session: SessionDep, _auth: AuthDep
+    essay_id: int,
+    payload: EssayUpdate,
+    request: Request,
+    session: SessionDep,
+    _auth: AuthDep,
 ) -> dict[str, Any]:
     """保存校对结果；``proofread=true`` 且文字非空时定稿（写 proofread_at）。
 
+    v1.3 起同一请求可一并提交评语 / 评分 / 精选（三者都是"不传即不改"）。它们**不参与
+    状态机**：只写评语绝不会把 review 推成 proofread —— 这是二期最容易写错、后果最重的
+    一条，用例单独守住（PRD v1.3 §10）。
+
     Raises:
-        ApiError: 404 不存在；400 定稿文字为空。
+        ApiError: 404 不存在；400 定稿文字为空 / 未定稿就评分或精选 / 本期精选已达上限。
     """
+    settings: AppSettings = request.app.state.settings
     essay = await _load_essay(session, essay_id)
     if essay is None:
         raise ApiError("作文不存在", code=404, status_code=404)
 
-    final_text = payload.final_text or ""
-    if not final_text.strip():
-        raise ApiError("定稿文字不能为空", code=400, status_code=400)
+    if payload.final_text is not None:
+        if not payload.final_text.strip():
+            raise ApiError("定稿文字不能为空", code=400, status_code=400)
+        essay.final_text = payload.final_text
 
-    essay.final_text = final_text
+    if payload.proofread and not (essay.final_text or "").strip():
+        # 定稿必须有正文：没传正文就用已存的那一份，两份都没有才拒绝。
+        raise ApiError("定稿文字不能为空", code=400, status_code=400)
     # title 为 None 表示"本次不改标题"（Worker 自动抽取的结果得以保留）；传字符串则按老师意图覆盖。
     if payload.title is not None:
         essay.title = payload.title.strip()[:200]
@@ -226,11 +247,49 @@ async def update_essay(
         essay.status = "proofread"
         essay.proofread_at = utcnow_iso()
 
+    # -- v1.3：评语 / 评分 / 精选。先判门禁再写入，避免"改了一半"。 --
+    if payload.teacher_comment is not None:
+        essay.teacher_comment = payload.teacher_comment or None
+    # 三态判据落在"字段有没有出现"上，而不是值是不是 None：Pydantic 会把缺字段和
+    # 显式 null 都折叠成 None，只看 ``payload.score`` 就永远分不清"这次不动分数"和
+    # "把打错的分数取消" —— 后者是老师的正常操作。
+    if "score" in payload.model_fields_set:
+        if payload.score is None:
+            essay.score = None
+        elif essay.status != "proofread":
+            raise ApiError("未定稿作文不可评分：请先完成校对定稿", code=400, status_code=400)
+        else:
+            essay.score = payload.score
+    if payload.selected is not None:
+        target = int(payload.selected)
+        if target and essay.status != "proofread":
+            raise ApiError("未定稿作文不可设为精选", code=400, status_code=400)
+        if target and not int(essay.selected or 0):
+            chosen = await _selected_in_issue(session, int(essay.issue_id), int(essay.id))
+            if len(chosen) >= MAX_SELECTED_PER_ISSUE:
+                raise ApiError(
+                    f"本期精选已达上限 {MAX_SELECTED_PER_ISSUE} 篇，请先取消一篇再添加",
+                    code=400,
+                    status_code=400,
+                )
+        essay.selected = target
+
     await session.commit()
 
     refreshed = await _load_essay(session, essay_id)
     assert refreshed is not None  # 刚提交过，必然存在
-    return envelope(essay_to_detail(refreshed).model_dump(), message="已保存")
+    thresholds = settings.ranking_config()["thresholds"]
+    return envelope(
+        essay_to_detail(refreshed, thresholds).model_dump(), message="已保存"
+    )
+
+
+async def _selected_in_issue(
+    session: AsyncSession, issue_id: int, except_essay_id: int
+) -> list[int]:
+    """本期已精选的其它作文 id（不含正在改的那一篇）。"""
+    stmt = select(Essay.id).where(Essay.issue_id == issue_id, Essay.selected == 1)
+    return [int(item) for item in (await session.execute(stmt)).scalars().all() if int(item) != except_essay_id]
 
 
 @router.post("/essays/{essay_id}/recognize", status_code=202, response_model=Envelope[RecognizeRerunOut])

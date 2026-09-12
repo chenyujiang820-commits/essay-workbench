@@ -30,7 +30,17 @@ from app.config import AppSettings, get_settings
 from app.db import create_engine, create_session_factory, init_db
 from app.models import RecognitionTask
 from app.pipeline.worker import build_worker
-from app.routers import auth_router, essays, exports, issues, photos, students
+from app.routers import (
+    auth_router,
+    awards,
+    essays,
+    exports,
+    issues,
+    photos,
+    portfolio,
+    shares,
+    students,
+)
 from app.schemas import ApiError, HealthOut, MetaOut, envelope
 
 logger = logging.getLogger(__name__)
@@ -230,6 +240,12 @@ def create_app() -> FastAPI:
     application.include_router(essays.router)
     application.include_router(photos.router)
     application.include_router(exports.router)
+    # 二期（v1.3）：精选与三榜、成长档案、家长分享。
+    application.include_router(awards.router)
+    application.include_router(portfolio.router)
+    application.include_router(shares.router)
+    # 唯一免鉴权的数据面（能力令牌 + 只读 + 过期），路由内部刻意不挂 require_auth。
+    application.include_router(shares.public_router)
 
     @application.get("/api/health", tags=["meta"])
     async def health(request: Request) -> JSONResponse:
