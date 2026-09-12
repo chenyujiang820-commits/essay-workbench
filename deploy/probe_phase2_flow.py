@@ -194,6 +194,108 @@ class Probe:
             {"kept": kept_now, "wanted": wanted},
         )
 
+    # -- 阶段 4：三榜口径（佳作/星级/进步）--
+    def stage_ranking(self, issue_id: int) -> None:
+        """三榜：名次与分数同序、精选只做标记、星级榜不露分数、进步榜要有基线。"""
+        essays = self._essays(issue_id)
+        scored = [item for item in essays if item.get("score") is not None]
+        picked_ids = {int(item["id"]) for item in essays if int(item.get("selected") or 0) == 1}
+        board = self.client.get(
+            "/api/issues/" + str(issue_id) + "/ranking", headers=self.headers
+        ).json()["data"]
+        self.step(
+            "三榜开关都在返回值里",
+            all(key in (board.get("config") or {}) for key in ("work", "progress", "star"))
+            and isinstance(board.get("disabled"), list),
+            {"config": sorted((board.get("config") or {}).keys()), "disabled": board.get("disabled")},
+        )
+        work = board.get("work") or []
+        work_scores = [float(row["score"]) for row in work]
+        self.step(
+            "佳作榜：只收已评分定稿，名次与分数同序",
+            len(work) == len(scored)
+            and [int(row["rank"]) for row in work] == list(range(1, len(work) + 1))
+            and work_scores == sorted(work_scores, reverse=True),
+            {"work": len(work), "scored": len(scored), "top_scores": work_scores[:3]},
+        )
+        marked = {int(row["essay_id"]) for row in work if row.get("selected")}
+        self.step(
+            "精选只在佳作榜上做标记，不另开一条名单",
+            marked == picked_ids & {int(row["essay_id"]) for row in work},
+            {"selected": sorted(picked_ids), "marked": sorted(marked)},
+        )
+        star = board.get("star") or []
+        self.step(
+            "星级榜不出名次与分数（弱化名次的回归锁）",
+            bool(star) and all("rank" not in row and "score" not in row for row in star),
+            {"rows": len(star), "keys": sorted(star[0].keys()) if star else []},
+        )
+        issues = self.client.get("/api/issues", headers=self.headers).json()["data"]
+        progress = board.get("progress") or []
+        self.step(
+            "进步榜：有上期基线才要求有人上榜，没基线时给空而不报错",
+            all(row.get("previous_score") is not None and row.get("delta") is not None for row in progress)
+            and (bool(progress) or len(issues) < 2),
+            {"rows": len(progress), "issue_count": len(issues)},
+        )
+        note = [key for key, val in (board.get("config") or {}).items() if val.get("visibility") == "teacher"]
+        self.step(
+            "教师可见的榜记在配置里（投屏与家长页据此遮）",
+            all(isinstance(val.get("visibility"), str) for val in (board.get("config") or {}).values()),
+            {"teacher_only": note},
+        )
+
+    # -- 阶段 5：个人成长档案 --
+    def stage_portfolio(self, student_id: int) -> None:
+        """档案只收已定稿；未评分的篇目保持 null，不能显示成 0 分。"""
+        data = self.client.get(
+            "/api/students/" + str(student_id) + "/portfolio", headers=self.headers
+        ).json()["data"]
+        entries = data.get("entries") or []
+        stats = data.get("stats") or {}
+        scores = [float(item["score"]) for item in entries if item.get("score") is not None]
+        avg_ok = (
+            stats.get("avg_score") is None
+            or abs(float(stats["avg_score"]) - sum(scores) / len(scores)) <= 0.05
+        )
+        self.step(
+            "成长档案：统计与明细同口径，平均分现算",
+            int(stats.get("essay_count") or 0) == len(entries) and bool(entries) and avg_ok,
+            {"entries": len(entries), "stats": stats},
+        )
+        unscored = [item for item in entries if item.get("score") is None]
+        self.step(
+            "未评分的篇目 score 保持 null 且不给星",
+            all(int(item.get("stars") or 0) == 0 for item in unscored),
+            {"unscored": len(unscored), "scored": len(scores)},
+        )
+
+    # -- 阶段 5b：海报与档案 PDF 导出 --
+    def stage_exports(self, issue_id: int, student_id: int) -> None:
+        """导出走真 Chromium：PDF 魔数与页数都要数得过来。"""
+        poster = self.client.post(
+            "/api/exports/" + str(issue_id) + "/poster", headers=self.headers
+        )
+        poster_pdf = poster.content or b""
+        pages = _page_count(poster_pdf) if poster_pdf.startswith(b"%PDF") else 0
+        self.step(
+            "本期精选海报导出成 PDF",
+            poster.status_code == 200 and poster_pdf.startswith(b"%PDF") and pages >= 1,
+            {"http": poster.status_code, "pages": pages, "bytes": len(poster_pdf)},
+        )
+        book = self.client.post(
+            "/api/exports/students/" + str(student_id) + "/portfolio",
+            params={"template": "formal"},
+            headers=self.headers,
+        )
+        book_pdf = book.content or b""
+        book_pages = _page_count(book_pdf) if book_pdf.startswith(b"%PDF") else 0
+        self.step(
+            "个人成长档案导出成 PDF",
+            book.status_code == 200 and book_pdf.startswith(b"%PDF") and book_pages >= 1,
+            {"http": book.status_code, "pages": book_pages, "bytes": len(book_pdf)},
+        )
+
     # -- 阶段 6：家长链接（真浏览器 + 手机视口 + 零登录态） --
     def stage_share(self, issue_id: int, student_nos: list[str], expect_items: int) -> None:
         created = self.client.post(
