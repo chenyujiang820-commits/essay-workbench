@@ -247,6 +247,8 @@ function mkResult(ids: number[], overrides: Partial<SelectionResult> = {}): Sele
 }
 
 function renderSelectionBoard(list: EssaySummary[]) {
+  // 勾选态初值来自后端回读，所以每一例都先把列表交给 mock 再渲染
+  vi.mocked(api.listIssueEssays).mockResolvedValue(list);
   const router = createMemoryRouter(
     [
       { path: "/", element: <div>期数列表页</div> },
@@ -286,7 +288,7 @@ describe("EssayListPage 本期精选（FR-05）", () => {
     expect(checkBox(11).checked).toBe(true);
     expect(screen.getByTestId("selection-saved-11").textContent).toContain("已存");
     expect(screen.getByTestId("selection-limit").textContent).toContain("已勾 10 / 10 篇");
-    expect(screen.getByTestId("submit-selection").disabled).toBe(true);
+    expect((screen.getByTestId("submit-selection") as HTMLButtonElement).disabled).toBe(true);
   });
 
   it("submits the whole set and repaints from the server echo, not from the click", async () => {
@@ -296,7 +298,7 @@ describe("EssayListPage 本期精选（FR-05）", () => {
 
     fireEvent.click(checkBox(11));
     fireEvent.click(checkBox(12));
-    expect(screen.getByTestId("submit-selection").disabled).toBe(false);
+    expect((screen.getByTestId("submit-selection") as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(screen.getByTestId("submit-selection"));
 
     await waitFor(() => expect(api.setSelection).toHaveBeenCalledWith(1, [11, 12]));

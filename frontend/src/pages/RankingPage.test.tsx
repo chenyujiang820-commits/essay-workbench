@@ -14,7 +14,7 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ApiError, api } from "../api/client";
-import type { BoardKey, ProgressRow, RankingData, StarRow, WorkRow } from "../api/types";
+import type { ProgressRow, RankingData, StarRow, WorkRow } from "../api/types";
 import { triggerDownload } from "../lib/download";
 import RankingPage, {
   BOARD_TITLES,
