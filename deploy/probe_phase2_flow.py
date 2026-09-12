@@ -350,6 +350,35 @@ class Probe:
             browser.close()
 
     # -- 还原：探针跑完必须把真库恢复原样 --
+    def purge_share_rows(self, tokens: list[str]) -> int:
+        """物理删掉探针自己建的分享链接行（含上一次跑到一半留下的残留）。
+
+        DELETE /api/shares/{token} 是产品的**撤销**语义：置 revoked=1、留一行可诊断记录。
+        探针要的不是这个：它答应过「不留测试残留」，而留着一条 label=probe 的已撤销链接，
+        老师打开分享管理就会看见一条自己从没建过的记录。撤销判据在上面已经单独验过了，
+        这里把行真的删掉，顺带清掉历史残留（探针建链接只用 probe 这一个标签）。
+        """
+        import sqlite3
+        from pathlib import Path
+
+        data_dir = Path(os.environ.get("EWB_DATA_DIR") or Path(__file__).resolve().parents[1] / "backend" / "data")
+        db = data_dir / "essay.db"
+        if not db.exists():
+            return -1
+        conn = sqlite3.connect(db)
+        try:
+            cur = conn.cursor()
+            deleted = 0
+            for token in tokens:
+                cur.execute("DELETE FROM share_links WHERE token = ?", (token,))
+                deleted += max(0, int(cur.rowcount))
+            cur.execute("DELETE FROM share_links WHERE label = 'probe'")
+            deleted += max(0, int(cur.rowcount))
+            conn.commit()
+        finally:
+            conn.close()
+        return deleted
+
     def restore(self) -> None:
         for row in self.snapshot:
             self.client.patch(
@@ -364,7 +393,18 @@ class Probe:
             )
         for token in self.share_tokens:
             self.client.delete("/api/shares/" + token, headers=self.headers)
-        self.step("已还原真库（评语/评分/精选/链接）", True, {"essays": len(self.snapshot), "shares": len(self.share_tokens)})
+        purged = self.purge_share_rows(self.share_tokens)
+        left = [
+            str(row["token"])
+            for row in self.client.get("/api/shares", headers=self.headers).json()["data"]
+            if str(row["token"]) in set(self.share_tokens)
+        ]
+        self.step(
+            "已还原真库（评语/评分/精选；链接行已物理删除）",
+            purged >= 0 and not left,
+            {"essays": len(self.snapshot), "shares": len(self.share_tokens),
+             "purged": purged, "left": left},
+        )
 
 
     # -- 配置：阈值与三榜开关（探针自己算星级要用） --
