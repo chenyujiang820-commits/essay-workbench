@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>{{ class_name }} · 第 {{ issue_no }} 期</title>
+    <style>
+      @page { size: A4 portrait; margin: 17mm 18mm 22mm; }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; padding: 0; }
+      body { font-family: {{ font_stack | safe }}; color: #3e3934; font-size: 12pt; line-height: 1.9; background: #fffdf8; }
+      .cover { page-break-after: always; min-height: 238mm; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; }
+      .cover .class { color: #8b6f47; font-size: 15pt; }
+      .cover h1 { margin: 12mm 0 6mm; color: #4d4138; font-size: 30pt; font-weight: 600; }
+      .cover .rule { width: 54mm; border-top: 1px solid #bda98d; }
+      .cover .meta { margin-top: 7mm; color: #8f8172; }
+      .toc { page-break-after: always; }
+      .toc h2 { margin: 0 0 4mm; color: #6b5745; font-size: 19pt; }
+      .toc .meta { margin-bottom: 5mm; color: #a19282; font-size: 10.5pt; }
+      .toc ol { margin: 0; padding: 0; list-style: none; }
+      .toc li { display: flex; justify-content: space-between; gap: 5mm; padding: 2.5mm 0; border-bottom: 1px solid #eadfd2; }
+      .toc .title { color: #8c7764; }
+      .badge { margin-left: 2mm; padding: .3mm 2mm; color: #fff; background: #9b7651; border-radius: 2mm; font-size: 8.5pt; }
+      .flag { margin-left: 2mm; color: #9b7651; font-size: 8.5pt; }
+      .stars { color: #b27b3c; font-size: 9pt; }
+      .essay { page-break-before: always; }
+      .essay h2 { margin: 0 0 3mm; padding: 2mm 0; border-top: 1px solid #d8c6b0; border-bottom: 1px solid #d8c6b0; color: #5b4b3d; text-align: center; font-size: 20pt; }
+      .author { margin-bottom: 7mm; color: #978878; text-align: center; }
+      .body p { margin: 0 0 4mm; text-indent: 2em; white-space: pre-wrap; }
+      .comment { margin-top: 8mm; padding: 3mm 4mm; border-left: 3px solid #bda98d; background: #f6eee5; color: #756252; white-space: pre-wrap; }
+      .comment-label { margin-bottom: 1mm; font-size: 9pt; font-weight: 700; }
+      .single { page-break-before: avoid; }
+    </style>
+  </head>
+  <body>
+    {% if mode == 'single' %}
+    <article class="essay single">
+      <h2>{{ item.title or '未命名' }}{% if item.is_selected %}<span class="badge">精选</span>{% endif %}</h2>
+      <div class="author">{{ item.name }}{% if item.student_no %} · {{ item.student_no }}{% endif %}</div>
+      <div class="body">{% for p in item.paragraphs %}<p>{{ p }}</p>{% else %}<p>（正文待补）</p>{% endfor %}</div>
+      {% if item.stars > 0 %}<div class="stars">{% for s in range(item.stars) %}★{% endfor %}{% for s in range(5 - item.stars) %}☆{% endfor %}</div>{% endif %}
+      {% if item.comment %}<div class="comment"><div class="comment-label">教师评语</div>{{ item.comment }}</div>{% endif %}
+    </article>
+    {% else %}
+    <section class="cover"><div class="class">{{ class_name }}</div><h1>{{ book_title }}</h1><div class="rule"></div><div class="meta">{{ subtitle }} · 共 {{ items | length }} 篇</div>{% if mode == 'portfolio' and student_name and student_name not in book_title %}<div class="meta">{{ student_name }} 的成长文集</div>{% endif %}{% if mode == 'share' and expires_at %}<div class="meta">本链接有效期至 {{ expires_at }}</div>{% endif %}</section>
+    <section class="toc"><h2>目录</h2><div class="meta">{{ class_name }} · 第 {{ issue_no }} 期 · 周一起 {{ week_start_date }}</div><ol>{% for item in items %}<li><span>{{ item.name }}{% if item.is_selected %}<span class="badge">精选</span>{% endif %}{% if item.comment %}<span class="flag">评语</span>{% endif %}</span><span class="title">{{ item.title or '未命名' }}</span></li>{% endfor %}</ol></section>
+    {% for item in items %}<article class="essay"><h2>{{ item.title or '未命名' }}{% if item.is_selected %}<span class="badge">精选</span>{% endif %}</h2><div class="author">{{ item.name }}{% if item.student_no %} · {{ item.student_no }}{% endif %}{% if mode == 'portfolio' and item.issue_no %} · 第 {{ item.issue_no }} 期{% endif %}</div><div class="body">{% for p in item.paragraphs %}<p>{{ p }}</p>{% else %}<p>（正文待补）</p>{% endfor %}</div>{% if item.stars > 0 %}<div class="stars">{% for s in range(item.stars) %}★{% endfor %}{% for s in range(5 - item.stars) %}☆{% endfor %}</div>{% endif %}{% if item.comment %}<div class="comment"><div class="comment-label">教师评语</div>{{ item.comment }}</div>{% endif %}</article>{% endfor %}
+    {% endif %}
+  </body>
+</html>

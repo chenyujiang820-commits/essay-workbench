@@ -18,6 +18,7 @@ import { useBlocker, useNavigate, useParams } from "react-router-dom";
 import { ApiError, api } from "../api/client";
 import type { EssayDetail, Photo } from "../api/types";
 import DiffText, {
+  DiffComparePanel,
   composeInitialText,
   listActiveSuspectKeys,
   listSuspectKeys,
@@ -223,6 +224,7 @@ export default function ProofreadPage() {
   const [error, setError] = useState("");
   const [retrying, setRetrying] = useState(false);
   const [retryNotice, setRetryNotice] = useState("");
+  const [reviewFocused, setReviewFocused] = useState(false);
 
   const review = useSuspectReview(essay?.photos ?? EMPTY_PHOTOS);
   // 仅取稳定引用的复位函数：避免 review 对象每次渲染新建导致 load 身份抖动（无限重加载）。
@@ -580,10 +582,10 @@ export default function ProofreadPage() {
         ))}
       </div>
 
-      {/* 手机端定稿框 + 识别对照远超一屏：整页滚动（见 styles.css 高度放开）才读得完；
-          桌面端仍保持「一屏不滚」的工作台布局（GAP-12 真机反馈）。 */}
-      <div className="mt-3 grid flex-1 gap-4 lg:min-h-0 lg:grid-cols-2 lg:overflow-hidden">
-        <section className={`min-h-0 flex-col ${pane === "photo" ? "flex" : "hidden"} lg:flex`}>
+      {/* 桌面端把「原片」和「校对工作区」并排：右侧按定稿 → 识别对照排列，
+          评语放在整页底部，避免把逐句校对动线拆成多个小区。 */}
+      <div className="mt-3 grid flex-1 gap-4 lg:min-h-0 lg:grid-cols-[minmax(0,0.72fr)_minmax(0,1.28fr)] lg:grid-rows-[minmax(0,1fr)_auto] lg:overflow-hidden">
+        <section className={`min-h-0 flex-col ${pane === "photo" ? "flex" : "hidden"} lg:col-start-1 lg:row-start-1 lg:flex`}>
           {photos.length > 1 ? (
             <div className="mb-2 flex flex-wrap gap-1">
               {photos.map((photo) => (
@@ -612,8 +614,22 @@ export default function ProofreadPage() {
           </div>
         </section>
 
-        <section className={`min-h-0 ${pane === "text" ? "block" : "hidden"} lg:block`}>
-          <DiffText
+        <section
+          className={`min-h-0 flex-col gap-3 ${pane === "text" ? "flex" : "hidden"} lg:col-start-2 lg:row-span-2 lg:flex`}
+        >
+          <div className="min-h-0 flex-1">
+            <DiffText
+              photos={photos}
+              value={value}
+              onChange={setValue}
+              onSelectPhoto={focusPhoto}
+              viewedSuspects={review.viewedSuspects}
+              onSuspectView={review.markViewed}
+              disabled={saving}
+              comparison="hidden"
+            />
+          </div>
+          <DiffComparePanel
             photos={photos}
             value={value}
             onChange={setValue}
@@ -623,20 +639,40 @@ export default function ProofreadPage() {
             disabled={saving}
           />
         </section>
-      </div>
-
       {/* v1.3「评」：评语 + 评分。精选勾选刻意不在此页（整期覆盖式，只在看板做）。
           识别失败稿没有可定稿的正文，整块不给入口。 */}
       {failed ? null : (
         <section
           data-testid="teacher-review"
-          className="mt-3 shrink-0 rounded-xl border border-slate-200 bg-white p-3 shadow-sm"
+          style={
+            reviewFocused
+              ? {
+                  position: "fixed",
+                  inset: "1rem",
+                  zIndex: 50,
+                  boxShadow: "0 20px 40px rgba(15, 23, 42, 0.24)",
+                }
+              : undefined
+          }
+          className={`mt-3 shrink-0 rounded-xl border border-slate-200 bg-white p-3 shadow-sm lg:col-start-1 lg:row-start-2 ${
+            reviewFocused ? "overflow-auto" : ""
+          }`}
         >
-          <div className="flex flex-wrap items-start gap-3">
-            <label className="min-w-[240px] flex-1 text-sm text-slate-700">
-              <span className="mb-1 block text-xs font-medium text-slate-500">
-                老师评语 · {comment.length}/{COMMENT_MAX_LENGTH} 字（随成册与投屏一并展示）
-              </span>
+          <div className="flex items-center justify-between gap-2">
+            <span className="min-w-0 text-xs font-medium text-slate-500">
+              老师评语 · {comment.length}/{COMMENT_MAX_LENGTH} 字（随成册与投屏一并展示）
+            </span>
+            <button
+              type="button"
+              data-testid="review-focus"
+              aria-pressed={reviewFocused}
+              onClick={() => setReviewFocused((focused) => !focused)}
+              className="shrink-0 rounded border border-slate-300 px-2 py-0.5 text-xs text-slate-700 hover:bg-slate-50"
+            >
+              {reviewFocused ? "还原" : "放大"}
+            </button>
+          </div>
+          <label className="mt-2 block text-sm text-slate-700">
               <textarea
                 data-testid="teacher-comment"
                 value={comment}
@@ -647,8 +683,9 @@ export default function ProofreadPage() {
                 onChange={(event) => setComment(event.target.value)}
                 className="w-full resize-y rounded-md border border-slate-300 px-3 py-2 text-sm leading-6 outline-none focus:border-slate-500 disabled:bg-slate-50"
               />
-            </label>
+          </label>
 
+          <div className="mt-2 flex flex-wrap items-start justify-between gap-3">
             <div className="w-36 shrink-0">
               <label className="block text-xs font-medium text-slate-500">
                 评分 0~100
@@ -674,7 +711,7 @@ export default function ProofreadPage() {
               </span>
             </div>
 
-            <div className="flex shrink-0 flex-col items-start gap-2 pt-5">
+            <div className="flex shrink-0 flex-col items-start gap-2">
               <button
                 type="button"
                 data-testid="save-comment"
@@ -710,6 +747,7 @@ export default function ProofreadPage() {
           </p>
         </section>
       )}
+      </div>
     </main>
   );
 }

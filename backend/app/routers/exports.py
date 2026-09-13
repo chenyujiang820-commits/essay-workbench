@@ -1,13 +1,13 @@
 """成册导出路由：模板清单 / 预览 / 整册 PDF / 单篇版式 PDF / 投屏数据。
 
-* ``GET  /api/exports/templates``                       三套模板清单（key+中文名+描述）
+* ``GET  /api/exports/templates``                       五套模板清单（key+中文名+描述）
 * ``GET  /api/exports/{issue_id}/preview``              渲染整册 HTML（text/html，iframe 预览）
 * ``GET  /api/exports/{issue_id}/present``              投屏数据（逐篇 name/title/paragraphs）
 * ``POST /api/exports/{issue_id}``                      整册 PDF（校对铁律：未全定稿 409）
 * ``POST /api/exports/{issue_id}/single/{essay_id}``    单篇版式 PDF（打印张贴用）
 
 校对铁律：整册导出要求该期**全部定稿**（status == proofread），否则 409。
-排序：``student_no``（默认）/ ``name``；``score`` 为二期预留，返回 400。
+排序：``student_no``（默认）/ ``name`` / ``score`` / ``selected_score``。
 """
 
 from __future__ import annotations
@@ -95,7 +95,7 @@ def _pdf_response(data: bytes, filename: str) -> Response:
 
 @router.get("/templates", response_model=Envelope[list[TemplateInfo]])
 async def list_templates(_auth: AuthDep) -> dict[str, Any]:
-    """三套成册模板清单。"""
+    """五套成册模板清单。"""
     return envelope([TemplateInfo(**item) for item in tpl.TEMPLATES])
 
 
@@ -317,7 +317,7 @@ async def create_portfolio_export(
 ) -> Response:
     """导出单生"个人文集 PDF"（成长档案的期末交付物，FR-06）。
 
-    复用三套成册模板，只换封面文案位；正文仍只取 ``final_text``（未定稿不进档案，
+    复用五套成册模板，只换封面文案位；正文仍只取 ``final_text``（未定稿不进档案，
     自然也不会进文集）。
 
     Raises:

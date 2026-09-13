@@ -25,6 +25,7 @@ from app.db import get_session
 from app.images import ensure_size, image_size, resolve_extension
 from app.models import Essay, Issue, Photo, RecognitionTask, Student, utcnow_iso
 from app.ranking import MAX_SELECTED_PER_ISSUE
+from app.render.templates import natural_text_key
 from app.schemas import (
     ApiError,
     Envelope,
@@ -189,7 +190,10 @@ async def list_issue_essays(
         .join(Student, Student.id == Essay.student_id)
         .order_by(Student.student_no.asc())
     )
-    essays = (await session.execute(stmt)).scalars().all()
+    essays = sorted(
+        (await session.execute(stmt)).scalars().all(),
+        key=lambda essay: natural_text_key(essay.student.student_no if essay.student else ""),
+    )
     thresholds = settings.ranking_config()["thresholds"]
     return envelope([essay_to_out(essay, thresholds) for essay in essays])
 

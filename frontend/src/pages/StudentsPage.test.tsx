@@ -17,6 +17,9 @@ vi.mock("../api/client", async (importOriginal) => {
       updateStudent: vi.fn(),
       deactivateStudent: vi.fn(),
       importStudents: vi.fn(),
+      confirmStudentImport: vi.fn(),
+      previewStudentImport: vi.fn(),
+      downloadStudentTemplate: vi.fn(),
     },
   };
 });
@@ -120,6 +123,31 @@ describe("StudentsPage", () => {
     await waitFor(() => expect(api.deactivateStudent).toHaveBeenCalledWith(2));
     expect(await screen.findByText("李四 已停用。")).toBeTruthy();
     confirmSpy.mockRestore();
+  });
+
+  it("previews a table file and confirms only a clean preview", async () => {
+    vi.mocked(api.previewStudentImport).mockResolvedValue({
+      rows: [{ student_no: "20230103", name: "王五", action: "新增" }],
+      errors: [],
+      valid_count: 1,
+      invalid_count: 0,
+      created_count: 1,
+      updated_count: 0,
+    });
+    vi.mocked(api.confirmStudentImport).mockResolvedValue({ created: 1, updated: 0 });
+    renderStudents();
+    await screen.findByText("张三");
+
+    fireEvent.click(screen.getByRole("button", { name: "批量导入" }));
+    const file = new File(["学号,姓名\n20230103,王五\n"], "roster.csv", { type: "text/csv" });
+    fireEvent.change(screen.getByTestId("import-file"), { target: { files: [file] } });
+    fireEvent.click(screen.getByRole("button", { name: "预览文件" }));
+
+    await waitFor(() => expect(api.previewStudentImport).toHaveBeenCalledWith(file));
+    fireEvent.click(screen.getByTestId("confirm-file-import"));
+    await waitFor(() =>
+      expect(api.confirmStudentImport).toHaveBeenCalledWith([{ student_no: "20230103", name: "王五" }]),
+    );
   });
 });
 /** 探针路由：把当前 pathname 打进 DOM，断言的是跳转落点，不是「没报错」。 */

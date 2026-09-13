@@ -122,6 +122,13 @@ describe("PortfolioPage", () => {
     expect(screen.queryByTestId("comment-13")).toBeNull();
   });
 
+  it("provides a direct return to the essay proofread page", async () => {
+    vi.mocked(api.fetchPortfolio).mockResolvedValue(portfolioData([entry(15, 6, "回到校对")], 80));
+    renderPage();
+
+    expect(await screen.findByTestId("portfolio-proofread-15")).toBeTruthy();
+  });
+
   it("exports with the picked template and order", async () => {
     vi.mocked(api.fetchPortfolio).mockResolvedValue(portfolioData([entry(14, 6, "可导出")], 88),
     );

@@ -121,6 +121,20 @@ describe("DiffText rendering", () => {
     expect(onChange).toHaveBeenCalledWith("新文");
   });
 
+  it("lets the comparison editor update the same controlled draft", () => {
+    const onChange = vi.fn();
+    render(
+      <DiffText
+        photos={[photo(1, [{ type: "replace", text_a: "原文", text_b: "建议" }])]}
+        value="原文"
+        onChange={onChange}
+      />,
+    );
+
+    fireEvent.change(screen.getByTestId("comparison-editor"), { target: { value: "修改后的稿子" } });
+    expect(onChange).toHaveBeenCalledWith("修改后的稿子");
+  });
+
   it("places the final-text editor above the diff reference section", () => {
     const photos = [photo(1, [{ type: "replace", text_a: "校园", text_b: "学校" }])];
     const { container } = render(
@@ -160,6 +174,7 @@ describe("DiffText rendering", () => {
     fireEvent.click(toggle);
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
     expect(screen.getByTestId("diff-annotated").hasAttribute("hidden")).toBe(true);
+    expect(screen.getByTestId("diff-details").className).toContain("min-h-0");
     fireEvent.click(toggle);
     expect(screen.getByTestId("diff-annotated").hasAttribute("hidden")).toBe(false);
   });
@@ -178,6 +193,7 @@ describe("DiffText rendering", () => {
     fireEvent.click(focus);
     expect(focus.getAttribute("aria-pressed")).toBe("true");
     expect(focus.textContent).toBe("还原");
+    expect(screen.getByTestId("diff-details").getAttribute("style")).toContain("position: fixed");
   });
 
   it("reports the suspect key when a suspect is clicked and when Enter is pressed", () => {

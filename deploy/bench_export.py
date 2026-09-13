@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """整册 PDF 导出在真实班级规模下的计时（补齐「45 篇规模需复测」这条开放项）。
 
-PRD 的验收写的是「全部定稿 → 导出 PDF ≤ 1 分钟」，一期只在 5 篇上量过（28.0s 出三套模板）。
+PRD 的验收写的是「全部定稿 → 导出 PDF ≤ 1 分钟」，一期只在 5 篇上量过；v1.4 默认覆盖五套模板。
 45 篇是老师一个班的真实规模，此前**没有数据**。本脚本补齐它。
 
 **不联网、不调引擎**：成册导出只读库里的定稿文本 + Playwright 渲染，正文用合成句池即可
@@ -152,7 +152,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--students", type=int, default=45, help="班级人数=篇数，默认 45")
     parser.add_argument("--password", default="bench-local-pass", help="仅本机压测用口令")
     parser.add_argument("--limit-seconds", type=float, default=60.0, help="单套模板的验收上限")
-    parser.add_argument("--templates", default="elegant,formal,playful", help="逗号分隔的模板键")
+    parser.add_argument("--templates", default="elegant,formal,playful,clean,reading", help="逗号分隔的模板键")
     parser.add_argument("--data-dir", default=None, help="隔离数据目录（默认临时目录，跑完删除）")
     parser.add_argument("--keep", action="store_true", help="保留数据目录与 PDF 以便目视检查")
     args = parser.parse_args(argv)

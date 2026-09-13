@@ -19,6 +19,26 @@ export interface Student {
   active: number;
 }
 
+export interface StudentImportPreviewRow {
+  student_no: string;
+  name: string;
+  action: "新增" | "更新";
+}
+
+export interface StudentImportPreviewError {
+  row: number;
+  message: string;
+}
+
+export interface StudentImportPreview {
+  rows: StudentImportPreviewRow[];
+  errors: StudentImportPreviewError[];
+  valid_count: number;
+  invalid_count: number;
+  created_count: number;
+  updated_count: number;
+}
+
 export type DiffType = "equal" | "replace" | "delete" | "insert";
 
 export interface DiffSegment {
@@ -64,6 +84,7 @@ export interface EssaySummary {
   issue_id: number;
   student_id: number;
   student_name: string | null;
+  student_no?: string | null;
   title: string;
   status: string;
   low_confidence: number;
@@ -120,7 +141,7 @@ export interface TemplateInfo {
 }
 
 /** 成册排序方式：学号 / 姓名 / 佳作序（分数降序、未评分排最后。v1.3 放开 score）。 */
-export type ExportOrder = "student_no" | "name" | "score";
+export type ExportOrder = "student_no" | "name" | "score" | "selected_score";
 
 export interface BookItem {
   student_no: string;

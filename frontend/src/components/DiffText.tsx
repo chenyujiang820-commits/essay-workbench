@@ -356,9 +356,20 @@ export interface DiffTextProps {
   /** 存疑处被点击 / 回车时上报其 key。 */
   onSuspectView?: (key: string) => void;
   disabled?: boolean;
+  comparison?: "inline" | "hidden";
 }
 
-export default function DiffText({
+export interface DiffComparePanelProps {
+  photos: Photo[];
+  value: string;
+  onChange?: (value: string) => void;
+  onSelectPhoto?: (seq: number) => void;
+  viewedSuspects?: ReadonlySet<string>;
+  onSuspectView?: (key: string) => void;
+  disabled?: boolean;
+}
+
+export function DiffComparePanel({
   photos,
   value,
   onChange,
@@ -366,7 +377,7 @@ export default function DiffText({
   viewedSuspects,
   onSuspectView,
   disabled = false,
-}: DiffTextProps) {
+}: DiffComparePanelProps) {
   const hasDiff = hasAnyDiff(photos);
   /** 对照面板展开态：初始恒为展开（不做 localStorage 持久化，进入页面即复位）。 */
   const [panelOpen, setPanelOpen] = useState(true);
@@ -398,31 +409,25 @@ export default function DiffText({
   const compareUnit = hasDiff ? "段" : "行";
 
   return (
-    // 桌面端撑满分栏高度；移动端按内容自然撑开，由外层分栏区滚动，避免定稿框被压成两行。
-    // 刻意不用 <details>/<summary>：Chromium 把 details 的非 summary 子节点包进
-    // ::details-content 匿名盒，section 上的 flex-1/min-h-0 落不到真正的 flex 子项上，
-    // 面板于是按内容长高、溢出被分栏的 overflow-hidden 裁掉，滚动条也不出现（真机「显示不齐全」）。
-    <div className="flex min-h-0 flex-col gap-3 lg:h-full">
-      <label
-        className={`flex min-h-0 flex-col gap-1 text-sm font-medium text-slate-700 ${
-          compareFocused ? "flex-none lg:h-[92px]" : "flex-[2]"
-        }`}
-      >
-        定稿文字
-        <textarea
-          data-testid="final-text"
-          className="min-h-[160px] w-full flex-1 resize-none rounded-lg border border-slate-300 p-3 text-base leading-7 outline-none focus:border-slate-500 disabled:bg-slate-50"
-          value={value}
-          disabled={disabled}
-          placeholder="在此核对并编辑定稿文字"
-          onChange={(event) => onChange(event.target.value)}
-        />
-      </label>
-
       <div
         data-testid="diff-details"
+        style={
+          compareFocused
+            ? {
+                position: "fixed",
+                inset: "1rem",
+                height: "calc(100vh - 2rem)",
+                zIndex: 50,
+                boxShadow: "0 20px 40px rgba(15, 23, 42, 0.24)",
+              }
+            : undefined
+        }
         className={`flex min-h-0 flex-col rounded-lg border border-slate-200 bg-slate-50 ${
-          compareFocused ? "flex-1" : "flex-[3]"
+          compareFocused
+            ? "h-full"
+            : panelOpen
+              ? "min-h-[180px] lg:h-[42%] lg:min-h-[190px] lg:shrink-0"
+              : "h-auto min-h-0 lg:shrink-0"
         }`}
       >
         <div className="flex shrink-0 flex-wrap items-center gap-2 px-4 py-2 text-sm font-medium text-slate-600">
@@ -464,7 +469,7 @@ export default function DiffText({
               type="button"
               data-testid="diff-focus"
               aria-pressed={compareFocused}
-              className="cursor-pointer rounded border border-slate-300 px-2 py-0.5 text-xs text-slate-700 hover:bg-white"
+              className="hidden cursor-pointer rounded border border-slate-300 px-2 py-0.5 text-xs text-slate-700 hover:bg-white lg:inline"
               onClick={() => setCompareFocused((focused) => !focused)}
             >
               {compareFocused ? "还原" : "放大"}
@@ -477,6 +482,18 @@ export default function DiffText({
           hidden={!panelOpen}
           className="min-h-0 flex-1 overflow-auto border-t border-slate-200 bg-white p-4 leading-8"
         >
+          {onChange ? (
+            <label className="mb-3 block text-xs font-medium text-slate-500">
+              在识别对照中修改校对草稿（会同步到定稿文字）
+              <textarea
+                data-testid="comparison-editor"
+                value={value}
+                disabled={disabled}
+                onChange={(event) => onChange(event.target.value)}
+                className="mt-1 min-h-[110px] w-full resize-y rounded-md border border-slate-300 p-3 text-base leading-7 text-slate-900 outline-none focus:border-slate-500 disabled:bg-slate-50"
+              />
+            </label>
+          ) : null}
           {hasDiff ? (
             photos.map((photo) => (
               <div key={photo.id} className="mb-4 last:mb-0">
@@ -595,6 +612,43 @@ export default function DiffText({
           )}
         </section>
       </div>
+  );
+}
+
+export default function DiffText({
+  photos,
+  value,
+  onChange,
+  onSelectPhoto,
+  viewedSuspects,
+  onSuspectView,
+  disabled = false,
+  comparison = "inline",
+}: DiffTextProps) {
+  return (
+    <div className="flex min-h-0 flex-col gap-1 lg:h-full">
+      <label className="flex min-h-0 flex-1 flex-col gap-1 text-sm font-medium text-slate-700">
+        定稿文字
+        <textarea
+          data-testid="final-text"
+          className="min-h-[160px] lg:min-h-[180px] w-full flex-1 resize-none rounded-lg border border-slate-300 p-3 text-base leading-7 outline-none focus:border-slate-500 disabled:bg-slate-50"
+          value={value}
+          disabled={disabled}
+          placeholder="在此核对并编辑定稿文字"
+          onChange={(event) => onChange(event.target.value)}
+        />
+      </label>
+      {comparison === "inline" ? (
+      <DiffComparePanel
+          photos={photos}
+          value={value}
+          onChange={onChange}
+          onSelectPhoto={onSelectPhoto}
+          viewedSuspects={viewedSuspects}
+          onSuspectView={onSuspectView}
+          disabled={disabled}
+        />
+      ) : null}
     </div>
   );
 }

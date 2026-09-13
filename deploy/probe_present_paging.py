@@ -36,12 +36,17 @@ READ_JS = r'''() => {
     disabled: b.disabled,
     visible: b.offsetParent !== null
   })).filter((b) => b.text.indexOf('页') >= 0);
+  const essayButtons = ['present-prev-essay', 'present-next-essay'].map((id) => {
+    const button = q(`[data-testid="${id}"]`);
+    return { id, disabled: button ? button.disabled : null, visible: button ? button.offsetParent !== null : false };
+  });
   return {
     title: q('[data-testid="present-title"]') ? q('[data-testid="present-title"]').innerText.trim() : null,
     name: q('[data-testid="present-name"]') ? q('[data-testid="present-name"]').innerText.trim() : null,
     progress: q('[data-testid="present-screen-progress"]') ? q('[data-testid="present-screen-progress"]').innerText.trim() : null,
     draft: q('[data-testid="present-draft"]') ? q('[data-testid="present-draft"]').innerText.trim() : null,
     pageButtons: btns,
+    essayButtons,
     columns: document.querySelectorAll('[data-testid="present-column"]').length,
     bodyChars: q('[data-testid="present-body"]') ? q('[data-testid="present-body"]').innerText.replace(/\s/g, '').length : -1
   };
@@ -83,7 +88,29 @@ def main() -> int:
         page.goto(BASE + '/present/1', wait_until='networkidle')
         page.wait_for_selector('[data-testid="present-slide"]', timeout=15000)
         page.wait_for_timeout(600)
-        for step in range(6):
+        # 先直接验证“下一篇/上一篇”是跨篇操作，不依赖当前篇有几屏。
+        initial = page.evaluate(READ_JS)
+        initial_key = (initial.get('name'), initial.get('title'))
+        next_essay = page.locator('[data-testid="present-next-essay"]')
+        prev_essay = page.locator('[data-testid="present-prev-essay"]')
+        if next_essay.count() and not next_essay.is_disabled():
+            next_essay.click()
+            page.wait_for_timeout(500)
+            switched = page.evaluate(READ_JS)
+            if (switched.get('name'), switched.get('title')) == initial_key:
+                print('PRESENT_PROBE FAIL: 下一篇点击后篇目未切换')
+                return 1
+            if prev_essay.count() and not prev_essay.is_disabled():
+                prev_essay.click()
+                page.wait_for_timeout(500)
+                restored = page.evaluate(READ_JS)
+                if (restored.get('name'), restored.get('title')) != initial_key:
+                    print('PRESENT_PROBE FAIL: 上一篇未回到初始篇目')
+                    return 1
+
+        # 逐屏推进直到全局末尾，覆盖每篇最后一屏仍可进入下一篇的逻辑。
+        max_steps = max(12, len(expected) * 12)
+        for step in range(max_steps):
             state = page.evaluate(READ_JS)
             state['step'] = step
             steps.append(state)
@@ -128,7 +155,7 @@ def main() -> int:
         page2.wait_for_selector('[data-testid="present-slide"]', timeout=15000)
         page2.wait_for_timeout(600)
         first = page2.evaluate(READ_JS)
-        page2.click('button:has-text("下一页")')
+        page2.click('[data-testid="present-next-essay"]')
         page2.wait_for_timeout(600)
         second = page2.evaluate(READ_JS)
         shot = Path(__file__).resolve().parents[1] / 'artifacts' / '投屏未定稿徽标-1366x768.png'
@@ -146,13 +173,13 @@ def main() -> int:
         browser.close()
     for s in steps:
         print(json.dumps(s, ensure_ascii=False))
-    seen = sorted({str(s.get('name')) for s in steps if s.get('name')})
-    want = sorted({str(row['name']) for row in expected if row['name']})
-    missing = [name for name in want if name not in seen]
+    seen = sorted({(str(s.get('name')), str(s.get('title'))) for s in steps if s.get('name')})
+    want = sorted({(str(row['name']), str(row['title'])) for row in expected if row['name']})
+    missing = [essay for essay in want if essay not in seen]
     badges = [s for s in steps if s.get('draft')]
-    print('SEEN_NAMES     =', json.dumps(seen, ensure_ascii=False))
-    print('EXPECTED_NAMES =', json.dumps(want, ensure_ascii=False))
-    print('MISSING_NAMES  =', json.dumps(missing, ensure_ascii=False))
+    print('SEEN_ESSAYS     =', json.dumps(seen, ensure_ascii=False))
+    print('EXPECTED_ESSAYS =', json.dumps(want, ensure_ascii=False))
+    print('MISSING_ESSAYS  =', json.dumps(missing, ensure_ascii=False))
     print('SCREENS_TOUCHED =', len(steps), 'DRAFT_BADGE_SEEN =', len(badges))
     if not stub_hits['hits']:
         print('PRESENT_PROBE FAIL: 响应桩一次都没命中（route 通配没匹配上），本次未判定')

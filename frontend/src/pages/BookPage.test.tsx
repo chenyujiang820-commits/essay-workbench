@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { api } from "../api/client";
 import type { EssaySummary, Issue, TemplateInfo } from "../api/types";
-import BookPage from "./BookPage";
+import BookPage, { sortEssaySummaries } from "./BookPage";
 
 vi.mock("../api/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../api/client")>();
@@ -148,5 +148,16 @@ describe("BookPage", () => {
         order: "student_no",
       }),
     );
+  });
+});
+
+describe("sortEssaySummaries", () => {
+  it("puts selected essays first and sorts selected essays by score", () => {
+    const rows = [
+      { ...essay(1, "proofread", "甲", "普通"), score: 99, selected: 0 },
+      { ...essay(2, "proofread", "乙", "精选低分"), score: 61, selected: 1 },
+      { ...essay(3, "proofread", "丙", "精选高分"), score: 95, selected: 1 },
+    ];
+    expect(sortEssaySummaries(rows, "selected_score").map((row) => row.id)).toEqual([3, 2, 1]);
   });
 });

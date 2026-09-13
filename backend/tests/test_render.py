@@ -1,6 +1,6 @@
 """T04：模板渲染 + 导出/投屏路由 + PDF 冒烟。
 
-* 纯渲染单测（不依赖数据库）：用轻量 ORM 实例直接渲染三套模板。
+* 纯渲染单测（不依赖数据库）：用轻量 ORM 实例直接渲染五套模板。
 * 路由测（client fixture）：templates / preview / present / 整册 PDF / 单篇 PDF / 400 / 409。
 * PDF 冒烟标记为 ``slow``（启动无头浏览器）。
 """
@@ -80,7 +80,10 @@ def make_meta(template: str = "elegant") -> dict[str, str | int]:
     )
 
 
-@pytest.mark.parametrize("template", ["elegant", "playful", "formal"])
+TEMPLATES_ALL: tuple[str, ...] = ("elegant", "playful", "formal", "clean", "reading")
+
+
+@pytest.mark.parametrize("template", TEMPLATES_ALL)
 def test_template_renders_fields(template: str) -> None:
     html = tpl.render_book_html([make_essay()], template, make_meta(template))
     assert "高一(1)班" in html
@@ -93,7 +96,7 @@ def test_template_renders_fields(template: str) -> None:
     assert "12pt" in html  # 正文打印字号 ≥ 12pt
 
 
-@pytest.mark.parametrize("template", ["elegant", "playful", "formal"])
+@pytest.mark.parametrize("template", TEMPLATES_ALL)
 def test_selected_badge_branch(template: str) -> None:
     selected_html = tpl.render_book_html([make_essay(selected=1)], template, make_meta(template))
     assert 'class="badge"' in selected_html
@@ -121,7 +124,7 @@ def test_sort_essays_by_student_no_and_name() -> None:
 
 
 def test_resolve_order_accepts_score_order() -> None:
-    """一期把 score 当"二期预留"直接 400；二期（v1.3 / FR-04）放开为真实排序。"""
+    """v1.4 支持 score 与 selected_score 两种排序，未知值仍直接 400。"""
     assert tpl.resolve_order(None) == "student_no"
     assert tpl.resolve_order("name") == "name"
     assert tpl.resolve_order("score") == "score"
@@ -140,6 +143,18 @@ def test_sort_essays_by_score_puts_unscored_last() -> None:
 
     ordered = tpl.sort_essays([missing_a, low, missing_b, high], "score")
     assert [essay.student.name for essay in ordered] == ["乙", "甲", "丙", "丁"]
+
+
+def test_sort_essays_selected_first_then_score() -> None:
+    ordinary_high = make_essay(student_no="S001", name="甲", score=99.0, selected=0)
+    selected_low = make_essay(student_no="S002", name="乙", score=61.0, selected=1)
+    selected_high = make_essay(student_no="S003", name="丙", score=95.0, selected=1)
+    selected_unscored = make_essay(student_no="S004", name="丁", score=None, selected=1)
+
+    ordered = tpl.sort_essays(
+        [ordinary_high, selected_unscored, selected_low, selected_high], "selected_score"
+    )
+    assert [essay.student.name for essay in ordered] == ["丙", "乙", "丁", "甲"]
 
 
 def test_build_items_carries_stars() -> None:
@@ -169,12 +184,13 @@ def test_split_paragraphs_drops_blank_lines() -> None:
 # ---------------------------------------------------------------------------
 # v1.2 / FR-12：评语位（条件渲染）+ FR-11 标题兜底
 # ---------------------------------------------------------------------------
-TEMPLATES_ALL: tuple[str, ...] = ("elegant", "playful", "formal")
-# 三套模板各自的评语特征文案；无评语时这些字样一个都不许出现
+# 五套模板各自的评语特征文案；无评语时这些字样一个都不许出现
 COMMENT_MARKERS: dict[str, str] = {
     "elegant": "教师评语",
     "playful": "老师想说",
     "formal": "师评",
+    "clean": "教师评语",
+    "reading": "教师评语",
 }
 COMMENT_KEYWORDS: tuple[str, ...] = ("教师评语", "老师想说", "师评")
 
@@ -205,7 +221,7 @@ def test_build_items_carries_comment(template: str) -> None:
 
 @pytest.mark.parametrize("template", TEMPLATES_ALL)
 def test_no_comment_renders_no_comment_dom(template: str) -> None:
-    """无评语（None / 空串 / 纯空白）时三套模板都不产生评语 DOM，一期视觉零回归。"""
+    """无评语（None / 空串 / 纯空白）时五套模板都不产生评语 DOM，一期视觉零回归。"""
     meta = make_meta(template)
     for comment in (None, "", "   \n  "):
         essay = make_essay(comment=comment)
@@ -339,7 +355,7 @@ def test_portfolio_mode_marks_student_and_per_essay_issue(template: str) -> None
 
 @pytest.mark.parametrize("template", TEMPLATES_ALL)
 def test_comment_renders_with_template_marker(template: str) -> None:
-    """有评语时三套模板都渲染评语原文，并各自带上特征前缀/标签。"""
+    """有评语时五套模板都渲染评语原文，并各自带上特征前缀/标签。"""
     comment = "观察仔细，用词准确。"
     meta = make_meta(template)
     essay = make_essay(comment=comment)
@@ -578,7 +594,7 @@ async def test_templates_endpoint(client: AsyncClient, auth_headers: dict[str, s
     response = await client.get("/api/exports/templates", headers=auth_headers)
     assert response.status_code == 200
     data = response.json()["data"]
-    assert [item["key"] for item in data] == ["elegant", "playful", "formal"]
+    assert [item["key"] for item in data] == ["elegant", "playful", "formal", "clean", "reading"]
     assert all(item["name"] and item["description"] for item in data)
 
 

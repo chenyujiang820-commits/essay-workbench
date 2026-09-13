@@ -1,9 +1,9 @@
-"""成册渲染：Jinja2 环境 + 统一数据结构 + 三套模板。
+"""成册渲染：Jinja2 环境 + 统一数据结构 + 五套模板。
 
 设计要点
 * 模板目录：默认取代码库 ``backend/assets/templates/``；若数据目录存在
   ``{EWB_DATA_DIR}/templates/`` 则**优先**（同名模板可被老师覆盖微调）。
-* 统一数据结构（三套模板共用）::
+* 统一数据结构（五套模板共用）::
 
       {
         class_name, issue_no, week_start_date, generated_at, template, order,
@@ -11,10 +11,10 @@
       }
 
   ``comment`` 取自 ``essay.teacher_comment``（v1.2 / FR-12 评语位）：一期一般为空，
-  三套模板用 ``{% if item.comment %}`` 条件渲染，空值不产生任何 DOM 与占位。
+  五套模板用 ``{% if item.comment %}`` 条件渲染，空值不产生任何 DOM 与占位。
 
 * 中文字体栈覆盖 Windows 开发机与 Linux 服务器，落到系统字体即可。
-* 三/二类排序：``student_no``（默认）/ ``name``；``score`` 为二期预留，一期返回 400。
+* 四类排序：``student_no``（默认）/ ``name`` / ``score`` / ``selected_score``。
 """
 
 from __future__ import annotations
@@ -37,6 +37,7 @@ FONT_STACK = (
     '"Source Han Sans SC", "WenQuanYi Micro Hei", sans-serif'
 )
 DEFAULT_CLASS_NAME = "班级"
+DISPLAY_LINE_WIDTH = 25
 
 #: 星级字符（模板全局，见 ``build_environment``）。
 STAR_CHAR = "★"
@@ -58,12 +59,31 @@ TEMPLATES: tuple[dict[str, str], ...] = (
         "name": "正式文集风",
         "description": "标题分隔线、规范落款与编委会页，适合校内文集。",
     },
+    {
+        "key": "clean",
+        "name": "清爽阅读风",
+        "description": "轻量留白与清晰层级，适合屏幕阅读和家庭打印。",
+    },
+    {
+        "key": "reading",
+        "name": "纸上阅读风",
+        "description": "暖白纸张与书页分隔，适合课堂讲评和连续阅读。",
+    },
 )
 DEFAULT_TEMPLATE = "elegant"
 VALID_TEMPLATES: tuple[str, ...] = tuple(item["key"] for item in TEMPLATES)
 
-#: 成册排序：学号（默认）/ 姓名 / 佳作序（分数降序，v1.3 / FR-04 放开）。
-VALID_ORDERS: tuple[str, ...] = ("student_no", "name", "score")
+#: 成册排序：学号（默认）/ 姓名 / 评分 / 精选优先。
+VALID_ORDERS: tuple[str, ...] = ("student_no", "name", "score", "selected_score")
+
+
+def natural_text_key(value: str | None) -> str:
+    """把学号中的数字按数值比较，避免 ``S10`` 排在 ``S2`` 前。"""
+    return re.sub(
+        r"\d+",
+        lambda match: f"{int(match.group()):020d}",
+        (value or "").strip().casefold(),
+    )
 
 
 def repo_templates_dir() -> Path:
@@ -85,7 +105,7 @@ def build_environment(settings: AppSettings | None = None) -> Environment:
         lstrip_blocks=True,
     )
     env.globals["font_stack"] = FONT_STACK
-    # 星形字符只在这里定义一次：三套成册模板 + 海报 + 档案都要用，
+    # 星形字符只在这里定义一次：五套成册模板 + 海报 + 档案都要用，
     # 写死在模板里就会出现"某套模板用了 ★、另一套用了 ☆"这种没法对齐的视觉回归。
     env.globals["star_char"] = STAR_CHAR
     env.globals["empty_star_char"] = EMPTY_STAR_CHAR
@@ -184,6 +204,13 @@ def split_paragraphs(text: str | None) -> list[str]:
     return paragraphs
 
 
+def wrap_display_line(text: str, width: int = DISPLAY_LINE_WIDTH) -> str:
+    """按作文格展示宽度换行；只用于渲染上下文，不改变数据库正文。"""
+    if width < 1 or len(text) <= width:
+        return text
+    return "\n".join(text[start : start + width] for start in range(0, len(text), width))
+
+
 def _student_no_of(essay: Essay) -> str:
     """学号（无学生信息时回空串，保证排序键永不为 None）。"""
     return essay.student.student_no if essay.student is not None else ""
@@ -200,7 +227,7 @@ def sort_essays(essays: Sequence[Essay], order: str) -> list[Essay]:
             essays,
             key=lambda essay: (
                 essay.student.name if essay.student is not None else "",
-                _student_no_of(essay),
+                natural_text_key(_student_no_of(essay)),
             ),
         )
     if order == "score":
@@ -208,10 +235,19 @@ def sort_essays(essays: Sequence[Essay], order: str) -> list[Essay]:
             essays,
             key=lambda essay: (
                 -(essay.score if essay.score is not None else float("-inf")),
-                _student_no_of(essay),
+                natural_text_key(_student_no_of(essay)),
             ),
         )
-    return sorted(essays, key=_student_no_of)
+    if order == "selected_score":
+        return sorted(
+            essays,
+            key=lambda essay: (
+                -(int(essay.selected)),
+                -(essay.score if essay.score is not None else float("-inf")),
+                natural_text_key(_student_no_of(essay)),
+            ),
+        )
+    return sorted(essays, key=lambda essay: natural_text_key(_student_no_of(essay)))
 
 
 # 投屏正文的取法（GAP-14）。上一轮为了消灭「投出空白页」，把投屏列表限定成 status=proofread，
@@ -247,8 +283,8 @@ def build_items(
 ) -> list[dict[str, Any]]:
     """把 ORM 作文序列映射为统一渲染条目（含评语位 ``comment``、星级 ``stars``）。
 
-    ``stars`` 在这里算、不在模板里算：模板里写死阈值的话，老师改一次配置就要改三套
-    版式，而三套版式正是 PDF 回归的高发区（PRD v1.3 §6）。
+    ``stars`` 在这里算、不在模板里算：模板里写死阈值的话，老师改一次配置就要改五套
+    版式，而多套版式正是 PDF 回归的高发区（PRD v1.4 §3）。
 
     ``include_draft_fallback`` 只给投屏用：真为 ``True`` 时未定稿稿件回退到识别初稿并标
     ``is_draft``；成册与预览走默认 ``False``，**正文仍然只认 ``final_text``**（校对铁律）。
@@ -257,12 +293,16 @@ def build_items(
     for essay in essays:
         student = essay.student
         body, is_draft = present_body(essay) if include_draft_fallback else (essay.final_text, False)
+        paragraphs = [
+            wrap_display_line(paragraph)
+            for paragraph in split_paragraphs(body)
+        ]
         items.append(
             {
                 "student_no": student.student_no if student is not None else "",
                 "name": student.name if student is not None else "",
                 "title": (essay.title or "").strip(),
-                "paragraphs": split_paragraphs(body),
+                "paragraphs": paragraphs,
                 "is_draft": is_draft,
                 "is_selected": bool(essay.selected),
                 "comment": (essay.teacher_comment or "").strip(),
@@ -296,7 +336,7 @@ def build_meta(
     student_name: str = "",
     hide_student_no: bool = False,
 ) -> dict[str, Any]:
-    """构造三套模板共用的元数据。
+    """构造五套模板共用的元数据。
 
     ``book_title`` / ``subtitle`` 是 v1.3 给封面留的两个可覆盖文案位：默认值与模板里
     原本硬写的字符串逐字相同，所以整册导出（一期数据）的输出保持字节级不变 ——
@@ -358,7 +398,7 @@ def _apply_meta_visibility(
 ) -> list[dict[str, Any]]:
     """按 ``meta.hide_student_no`` 抹掉学号（家长只读页：家长不需要知道学号编排）。
 
-    就地改渲染上下文而不是给模板加分支：模板里少一处条件，三套版式就少一处会漏改的地方。
+    就地改渲染上下文而不是给模板加分支：模板里少一处条件，多套版式就少一处会漏改的地方。
     """
     if meta.get("hide_student_no"):
         for item in items:
@@ -389,7 +429,7 @@ def render_poster_html(
 ) -> str:
     """渲染"本周精选"海报（A4 单页，直接发家长群）。
 
-    刻意不复用三套成册模板：海报要的是"一篇一段摘要 + 评语 + 星级"，而成册模板是一篇
+    刻意不复用五套成册模板：海报要的是"一篇一段摘要 + 评语 + 星级"，而成册模板是一篇
     一页的全文 —— 两者对分页的诉求正好相反。
     """
     env = build_environment(settings)
@@ -435,7 +475,7 @@ def render_portfolio_html(
 ) -> str:
     """渲染个人文集（成长档案导出）。
 
-    复用三套模板、只换 mode 与封面文案位：版式已经过真机与打印验证，
+    复用五套模板、只换 mode 与封面文案位：版式已经过真机与打印验证，
     为档案再写一套版式等于把 GAP-09 的分页坑重新踩一遍。
     """
     env = build_environment(settings)

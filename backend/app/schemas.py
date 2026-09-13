@@ -234,6 +234,7 @@ class EssayOut(BaseModel):
     issue_id: int
     student_id: int
     student_name: str | None = None
+    student_no: str | None = None
     title: str = ""
     status: str = "uploaded"
     low_confidence: int = 0
@@ -409,7 +410,7 @@ class ExportRequest(BaseModel):
     """整册导出请求。"""
 
     template: str = Field(default="elegant", description="模板 key")
-    order: str = Field(default="student_no", description="student_no | name")
+    order: str = Field(default="student_no", description="student_no | name | score | selected_score")
 
 
 # ---------------------------------------------------------------------------
@@ -672,6 +673,7 @@ def essay_to_out(essay: Essay, thresholds: Sequence[int] = DEFAULT_STAR_THRESHOL
         issue_id=essay.issue_id,
         student_id=essay.student_id,
         student_name=essay.student.name if essay.student is not None else None,
+        student_no=essay.student.student_no if essay.student is not None else None,
         title=essay.title,
         status=essay.status,
         low_confidence=essay.low_confidence,
@@ -697,6 +699,7 @@ def essay_to_detail(
         issue_id=essay.issue_id,
         student_id=essay.student_id,
         student_name=essay.student.name if essay.student is not None else None,
+        student_no=essay.student.student_no if essay.student is not None else None,
         title=essay.title,
         status=essay.status,
         low_confidence=essay.low_confidence,

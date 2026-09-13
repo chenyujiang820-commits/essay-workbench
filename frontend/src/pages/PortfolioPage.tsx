@@ -286,6 +286,14 @@ export default function PortfolioPage() {
                             本期精选
                           </span>
                         ) : null}
+                        <button
+                          type="button"
+                          data-testid={"portfolio-proofread-" + entry.essay_id}
+                          onClick={() => navigate("/essays/" + entry.essay_id + "/proofread")}
+                          className="shrink-0 rounded-md border border-slate-300 px-2 py-1 text-xs text-slate-700 hover:bg-slate-50"
+                        >
+                          返回校对
+                        </button>
                       </div>
                       <p className="mt-1 text-xs text-slate-400">
                         原片 {entry.photo_count} 张

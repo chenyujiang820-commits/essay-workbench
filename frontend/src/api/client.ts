@@ -19,6 +19,7 @@ import type {
   ShareLink,
   ShareView,
   Student,
+  StudentImportPreview,
   TemplateInfo,
   UploadResult,
 } from "./types";
@@ -261,6 +262,26 @@ export const api = {
     students: { student_no: string; name: string }[],
   ): Promise<{ created: number; updated: number }> {
     return request<{ created: number; updated: number }>("/students/import", {
+      method: "POST",
+      body: JSON.stringify({ students }),
+    });
+  },
+
+  previewStudentImport(file: File): Promise<StudentImportPreview> {
+    const form = new FormData();
+    form.append("file", file, file.name);
+    return request<StudentImportPreview>("/students/import-file", {
+      method: "POST",
+      body: form,
+    });
+  },
+
+  downloadStudentTemplate(format: "xlsx" | "csv"): Promise<Blob> {
+    return requestBlob(`/students/import-template?format=${format}`);
+  },
+
+  confirmStudentImport(students: { student_no: string; name: string }[]): Promise<{ created: number; updated: number }> {
+    return request<{ created: number; updated: number }>("/students/import-file/confirm", {
       method: "POST",
       body: JSON.stringify({ students }),
     });

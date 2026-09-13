@@ -49,6 +49,8 @@ export default function UploadPage() {
   const [issue, setIssue] = useState<Issue | null>(null);
   const [students, setStudents] = useState<Student[]>([]);
   const [studentId, setStudentId] = useState("");
+  const [selectedStudentIds, setSelectedStudentIds] = useState<number[]>([]);
+  const [uploadedStudentIds, setUploadedStudentIds] = useState<number[]>([]);
   const [files, setFiles] = useState<File[]>([]);
   const [thumbs, setThumbs] = useState<string[]>([]);
   /** 与 files 同序的画质判定结果（true = 低于手写识别门槛）。 */
@@ -166,6 +168,13 @@ export default function UploadPage() {
       const uploaded = await api.uploadEssay(numericIssueId, Number(studentId), files);
       setResult(uploaded);
       clearFiles();
+      setUploadedStudentIds((previous) => [...previous, Number(studentId)]);
+      const nextStudent = selectedStudentIds.find(
+        (id) => id !== Number(studentId) && !uploadedStudentIds.includes(id),
+      );
+      if (nextStudent !== undefined) {
+        setStudentId(String(nextStudent));
+      }
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "上传失败，请重试");
     } finally {
@@ -183,6 +192,10 @@ export default function UploadPage() {
   const studentSelectedHidden =
     studentId !== "" && !filteredStudents.some((student) => String(student.id) === studentId);
   const lowResCount = lowRes.filter(Boolean).length;
+  const activeStudent = students.find((student) => String(student.id) === studentId);
+  const pendingQueueCount = selectedStudentIds.filter(
+    (id) => !uploadedStudentIds.includes(id),
+  ).length;
 
   return (
     <main className="mx-auto max-w-2xl px-4 py-6 sm:px-6 sm:py-8">
@@ -231,23 +244,27 @@ export default function UploadPage() {
 
       <section className="mt-6 rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
         <label className="block text-sm font-medium text-slate-700" htmlFor="student">
-          学生
+          选择学生
         </label>
-        {students.length > 15 ? (
-          <input
-            type="search"
-            aria-label="搜索学生"
-            placeholder="输入姓名或学号过滤"
-            className="mt-2 w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-500"
-            value={studentQuery}
-            onChange={(event) => setStudentQuery(event.target.value)}
-          />
-        ) : null}
+        <input
+          type="search"
+          aria-label="搜索学生"
+          placeholder="输入姓名或学号过滤"
+          className="mt-2 w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-500"
+          value={studentQuery}
+          onChange={(event) => setStudentQuery(event.target.value)}
+        />
         <select
           id="student"
-          className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 outline-none focus:border-slate-500"
+          aria-label="学生"
+          className="sr-only"
           value={studentId}
-          onChange={(event) => setStudentId(event.target.value)}
+          onChange={(event) => {
+            const value = event.target.value;
+            setStudentId(value);
+            setSelectedStudentIds(value ? [Number(value)] : []);
+            setUploadedStudentIds([]);
+          }}
         >
           <option value="">请选择学生</option>
           {filteredStudents.map((student) => (
@@ -256,6 +273,50 @@ export default function UploadPage() {
             </option>
           ))}
         </select>
+        <div
+          data-testid="student-grid"
+          className="mt-3 grid max-h-64 grid-cols-4 gap-2 overflow-y-auto pr-1 min-[390px]:grid-cols-5"
+        >
+          {filteredStudents.map((student) => {
+            const selected = selectedStudentIds.includes(student.id);
+            const uploaded = uploadedStudentIds.includes(student.id);
+            return (
+              <label
+                key={student.id}
+                data-testid={`student-card-${student.id}`}
+                className={`relative flex min-h-16 cursor-pointer flex-col justify-center rounded-md border px-2 py-2 text-left text-xs transition-colors ${
+                  selected ? "border-slate-800 bg-slate-100" : "border-slate-200 bg-white"
+                } ${uploaded ? "opacity-50" : ""}`}
+              >
+                <input
+                  type="checkbox"
+                  aria-label={`选择${student.name}`}
+                  className="absolute right-1.5 top-1.5 h-3.5 w-3.5"
+                  checked={selected}
+                  disabled={uploaded}
+                  onChange={() => {
+                    setSelectedStudentIds((previous) => {
+                      const next = selected
+                        ? previous.filter((id) => id !== student.id)
+                        : [...previous, student.id];
+                      const active = next.find((id) => !uploadedStudentIds.includes(id));
+                      setStudentId(active === undefined ? "" : String(active));
+                      return next;
+                    });
+                  }}
+                />
+                <span className="pr-4 font-medium text-slate-900">{student.name}</span>
+                <span className="mt-0.5 text-[10px] text-slate-400">{student.student_no}</span>
+                {uploaded ? <span className="mt-0.5 text-[10px] text-emerald-600">已上传</span> : null}
+              </label>
+            );
+          })}
+        </div>
+        <p data-testid="upload-queue" className="mt-2 text-xs text-slate-500">
+          {pendingQueueCount > 0
+            ? `已选 ${selectedStudentIds.length} 人，当前为 ${activeStudent?.name ?? "未选择"} 拍照；还需上传 ${pendingQueueCount} 人。`
+            : "请选择需要拍照的学生，可连续处理多名学生。"}
+        </p>
         {studentSelectedHidden ? (
           <p className="mt-1 text-xs text-slate-400">已选学生被搜索条件过滤，清空搜索框即可恢复显示。</p>
         ) : null}

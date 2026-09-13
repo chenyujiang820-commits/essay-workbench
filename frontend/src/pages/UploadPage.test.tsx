@@ -218,4 +218,18 @@ describe("UploadPage", () => {
     await screen.findByTestId("format-warning");
     await waitFor(() => expect(screen.getByText(/已选 1 张/)).toBeTruthy());
   });
+
+  it("renders a selectable student grid", async () => {
+    vi.mocked(api.listStudents).mockResolvedValue([
+      { id: 7, student_no: "S001", name: "张三", active: 1 },
+      { id: 8, student_no: "S002", name: "李四", active: 1 },
+    ]);
+    renderUpload();
+    await screen.findByTestId("student-grid");
+
+    fireEvent.click(screen.getByLabelText("选择张三"));
+    fireEvent.click(screen.getByLabelText("选择李四"));
+    expect((screen.getByLabelText("选择张三") as HTMLInputElement).checked).toBe(true);
+    expect(screen.getByTestId("upload-queue").textContent).toContain("已选 2 人");
+  });
 });

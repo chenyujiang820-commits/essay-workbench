@@ -10,7 +10,7 @@
     3. 以真实配置启动 uvicorn（绑定 127.0.0.1，随机高位端口）；
     4. 登录 → 建期 → 上传 5 张真实手写原片（1 篇 1 张）→ 轮询状态机至 review/failed；
     5. 校对 PATCH 定稿（以引擎转写文本作为老师定稿文本）；
-    6. 导出三套模板 PDF（elegant / playful / formal）→ ``artifacts/``；
+    6. 导出五套模板 PDF（elegant / playful / formal / clean / reading）→ ``artifacts/``；
     7. 落盘 ``artifacts/smoke_report.json``（含每步耗时、识别质量观察、降级情况）。
 
 安全约束：脚本只从数据目录的 engines.yaml 读配置，**任何日志/报告都不输出 api_key**。
@@ -60,7 +60,7 @@ DEFAULT_IMAGE_NAMES = [
     "clipboard-2026-09-10T08-58-01-094Z-edde4d46.jpg",
 ]
 
-TEMPLATES = ("elegant", "playful", "formal")
+TEMPLATES = ("elegant", "playful", "formal", "clean", "reading")
 DEFAULT_PASSWORD = "admin123"
 POLL_INTERVAL_S = 2.0
 POLL_TIMEOUT_S = 360.0
@@ -408,7 +408,7 @@ def main(argv: list[str] | None = None) -> int:
                 essay["final_chars"] = len(text)
             recorder.step("proofread", f"{len(essay_reports)} 篇定稿", time.perf_counter() - t0)
 
-            # 导出三套模板 PDF。
+            # 导出五套模板 PDF。
             exports: list[dict[str, Any]] = []
             for template in TEMPLATES:
                 t0 = time.perf_counter()
@@ -424,7 +424,7 @@ def main(argv: list[str] | None = None) -> int:
                     }
                 )
                 print(f"[export] {template} -> {out_name} ({len(data)} bytes)", flush=True)
-            recorder.step("export", "导出三套模板 PDF", sum(e["seconds"] for e in exports))
+            recorder.step("export", "导出五套模板 PDF", sum(e["seconds"] for e in exports))
 
             # 投屏数据（供截图脚本与验收记录参考）。
             present = client.get(f"/api/exports/{issue['id']}/present").json()["data"]

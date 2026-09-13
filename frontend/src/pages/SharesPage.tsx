@@ -245,7 +245,7 @@ export default function SharesPage() {
               value={studentId}
               onChange={(event) => setStudentId(event.target.value)}
             >
-              <option value="">整期（全部已定稿作文）</option>
+            <option value="">整期全部（推荐）</option>
               {students.map((student) => (
                 <option key={student.id} value={String(student.id)}>
                   仅 {student.name}

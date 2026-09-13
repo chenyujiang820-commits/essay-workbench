@@ -22,6 +22,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { ApiError, api } from "../api/client";
 import type { PresentData } from "../api/types";
 import Pager from "../components/Pager";
+import { formatParagraphsForDisplay } from "../lib/textLayout";
 
 /** 无标题作文的兜底文案（FR-11：区别于误导性的「无题」，与成册模板同口径）。 */
 export const UNTITLED_LABEL = "未命名";
@@ -278,6 +279,8 @@ export default function PresentPage() {
   const [essayIndex, setEssayIndex] = useState(0);
   const [screenIndex, setScreenIndex] = useState(0);
   const [pure, setPure] = useState(false);
+  const [order, setOrder] = useState("student_no");
+  const [directoryOpen, setDirectoryOpen] = useState(true);
   const [fontSize, setFontSize] = useState<FontSizeTier>(DEFAULT_FONT_TIER);
   /** 视口宽度：决定两栏还是单栏（真机智慧黑板 1920，笔记本/投影 1024 退单栏）。 */
   const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
@@ -297,7 +300,7 @@ export default function PresentPage() {
     setLoading(true);
     setError("");
     api
-      .fetchPresent(numericIssueId)
+      .fetchPresent(numericIssueId, order)
       .then((payload) => {
         if (!cancelled) {
           layoutsRef.current.clear();
@@ -320,7 +323,7 @@ export default function PresentPage() {
     return () => {
       cancelled = true;
     };
-  }, [numericIssueId]);
+  }, [numericIssueId, order]);
 
   // 视口尺寸变化（换投影仪 / 旋转屏幕 / 拖窗口）→ 记宽度并清缓存重排。
   useEffect(() => {
@@ -342,7 +345,11 @@ export default function PresentPage() {
   const currentItem = items[safeEssayIndex] ?? null;
   const paragraphs = useMemo(
     () =>
-      currentItem && currentItem.paragraphs.length > 0 ? currentItem.paragraphs : [PLACEHOLDER_TEXT],
+      formatParagraphsForDisplay(
+        currentItem && currentItem.paragraphs.length > 0
+          ? currentItem.paragraphs
+          : [PLACEHOLDER_TEXT],
+      ),
     [currentItem],
   );
 
@@ -421,6 +428,20 @@ export default function PresentPage() {
     }
   }, [screenIndex, screenCount, essayIndex, essayCount]);
 
+  const goPreviousEssay = useCallback(() => {
+    if (essayIndex > 0) {
+      setEssayIndex((index) => index - 1);
+      setScreenIndex(0);
+    }
+  }, [essayIndex]);
+
+  const goNextEssay = useCallback(() => {
+    if (essayIndex < essayCount - 1) {
+      setEssayIndex((index) => index + 1);
+      setScreenIndex(0);
+    }
+  }, [essayIndex, essayCount]);
+
   const exit = useCallback(() => navigate("/issues/" + issueId + "/essays"), [navigate, issueId]);
 
   if (loading) {
@@ -475,6 +496,62 @@ export default function PresentPage() {
             </p>
           </div>
           <div className="flex items-center gap-2">
+            <label className="flex items-center gap-1 text-sm text-slate-500 lg:hidden">
+              作文
+              <select
+                data-testid="present-mobile-directory"
+                value={safeEssayIndex}
+                onChange={(event) => {
+                  setEssayIndex(Number(event.target.value));
+                  setScreenIndex(0);
+                }}
+                className="max-w-32 rounded border border-slate-300 bg-white px-2 py-1 text-sm text-slate-700"
+              >
+                {items.map((item, index) => (
+                  <option key={`${item.student_no}-${index}`} value={index}>
+                    {(item.name || "未命名学生") + " · " + (item.title || UNTITLED_LABEL)}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button
+              type="button"
+              data-testid="present-directory-toggle"
+              onClick={() => setDirectoryOpen((open) => !open)}
+              className="hidden rounded-md border border-slate-300 px-3 py-1 text-sm text-slate-700 lg:inline"
+            >
+              {directoryOpen ? "收起目录" : "打开目录"}
+            </button>
+            <button
+              type="button"
+              data-testid="present-prev-essay"
+              disabled={safeEssayIndex <= 0}
+              onClick={goPreviousEssay}
+              className="rounded-md border border-slate-300 px-3 py-1 text-sm text-slate-700 disabled:opacity-40"
+            >
+              上一篇
+            </button>
+            <button
+              type="button"
+              data-testid="present-next-essay"
+              disabled={safeEssayIndex >= essayCount - 1}
+              onClick={goNextEssay}
+              className="rounded-md border border-slate-300 px-3 py-1 text-sm text-slate-700 disabled:opacity-40"
+            >
+              下一篇
+            </button>
+            <label className="hidden items-center gap-1 text-sm text-slate-500 lg:flex">
+              目录排序
+              <select
+                data-testid="present-order"
+                value={order}
+                onChange={(event) => setOrder(event.target.value)}
+                className="rounded border border-slate-300 px-2 py-1 text-sm text-slate-700"
+              >
+                <option value="student_no">按学号</option>
+                <option value="selected_score">精选优先</option>
+              </select>
+            </label>
             <span className="mr-1 text-sm text-slate-400">字号</span>
             {FONT_TIERS.map((tier) => (
               <button
@@ -524,21 +601,51 @@ export default function PresentPage() {
         </button>
       )}
 
-      <Pager
-        index={safeScreenIndex}
-        total={screenCount}
-        hasPrevPage={hasPrevPage}
-        hasNextPage={hasNextPage}
-        onPrev={goPrev}
-        onNext={goNext}
-        onExit={exit}
-        progressText={progressText}
-        showControls={!pure}
-      >
-        <article
-          data-testid="present-slide"
-          className="flex h-full w-full flex-col px-10 py-6"
+      <div className="flex min-h-0 flex-1">
+        {!pure && directoryOpen ? (
+          <aside data-testid="present-directory" className="hidden w-64 shrink-0 overflow-y-auto border-r border-slate-200 bg-white px-3 py-4 lg:block">
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <p className="text-sm font-semibold text-slate-700">作文目录</p>
+              <span className="text-xs text-slate-400">{essayCount} 篇</span>
+            </div>
+            <ol className="space-y-1">
+              {items.map((item, index) => (
+                <li key={`${item.student_no}-${index}`}>
+                  <button
+                    type="button"
+                    data-testid={`present-directory-item-${index}`}
+                    aria-current={index === safeEssayIndex ? "true" : undefined}
+                    onClick={() => {
+                      setEssayIndex(index);
+                      setScreenIndex(0);
+                    }}
+                    className={`w-full rounded-md px-2 py-2 text-left text-sm ${index === safeEssayIndex ? "bg-slate-900 text-white" : "text-slate-700 hover:bg-slate-100"}`}
+                  >
+                    <span className="block truncate">{item.name || "未命名学生"}</span>
+                    <span className={`block truncate text-xs ${index === safeEssayIndex ? "text-slate-300" : "text-slate-400"}`}>
+                      {item.title || UNTITLED_LABEL}{item.is_selected ? " · 精选" : ""}
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ol>
+          </aside>
+        ) : null}
+        <Pager
+          index={safeScreenIndex}
+          total={screenCount}
+          hasPrevPage={hasPrevPage}
+          hasNextPage={hasNextPage}
+          onPrev={goPrev}
+          onNext={goNext}
+          onExit={exit}
+          progressText={progressText}
+          showControls={!pure}
         >
+          <article
+            data-testid="present-slide"
+            className="flex h-full w-full flex-col px-10 py-6"
+          >
           <header data-testid="present-header" className="shrink-0 text-center">
             <h1
               data-testid="present-title"
@@ -609,8 +716,9 @@ export default function PresentPage() {
               )}
             </div>
           </div>
-        </article>
-      </Pager>
+          </article>
+        </Pager>
+      </div>
 
       {!pure ? (
         <footer className="flex items-center justify-center gap-3 py-2">

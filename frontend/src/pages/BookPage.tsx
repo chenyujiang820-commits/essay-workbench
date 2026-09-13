@@ -1,9 +1,9 @@
 /**
- * 成册预览与导出：模板切换（所见即所得 iframe 预览）、排序（学号/姓名，评分二期置灰）、
+ * 成册预览与导出：五套模板切换（所见即所得 iframe 预览）、四种排序、
  * 校对铁律禁用（未全定稿不可导出）、整册 PDF 与单篇版式下载。
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
 import { ApiError, api } from "../api/client";
@@ -15,6 +15,26 @@ import { bookFileName, singleFileName, triggerDownload } from "../lib/download";
 import { formatDate } from "../lib/date";
 
 type PreviewState = "empty" | "loading" | "ready" | "error";
+
+export function sortEssaySummaries(essays: EssaySummary[], order: ExportOrder): EssaySummary[] {
+  return [...essays].sort((left, right) => {
+    const compareStudentNo = (left.student_no ?? "").localeCompare(
+      right.student_no ?? "",
+      "zh-CN",
+      { numeric: true, sensitivity: "base" },
+    );
+    if (order === "name") {
+      return (left.student_name ?? "").localeCompare(right.student_name ?? "", "zh-CN") || compareStudentNo || left.id - right.id;
+    }
+    if (order === "score") {
+      return (right.score ?? Number.NEGATIVE_INFINITY) - (left.score ?? Number.NEGATIVE_INFINITY) || compareStudentNo || (left.student_name ?? "").localeCompare(right.student_name ?? "", "zh-CN") || left.id - right.id;
+    }
+    if (order === "selected_score") {
+      return right.selected - left.selected || (right.score ?? Number.NEGATIVE_INFINITY) - (left.score ?? Number.NEGATIVE_INFINITY) || compareStudentNo || (left.student_name ?? "").localeCompare(right.student_name ?? "", "zh-CN") || left.id - right.id;
+    }
+    return compareStudentNo || left.id - right.id;
+  });
+}
 
 export default function BookPage() {
   const { issueId } = useParams();
@@ -36,6 +56,7 @@ export default function BookPage() {
 
   const pendingCount = essays.filter((essay) => essay.status !== "proofread").length;
   const canExport = essays.length > 0 && pendingCount === 0;
+  const orderedEssays = useMemo(() => sortEssaySummaries(essays, order), [essays, order]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -177,7 +198,8 @@ export default function BookPage() {
             >
               <option value="student_no">按学号</option>
               <option value="name">按姓名</option>
-              <option value="score">按评分（佳作优先）</option>
+              <option value="score">按评分</option>
+              <option value="selected_score">精选优先（精选内按评分）</option>
             </select>
             <p className="mt-1 text-xs text-slate-400">按评分排序时分数高的在前，未评分的排最后（同分按学号）。</p>
 
@@ -206,8 +228,8 @@ export default function BookPage() {
             {essays.length === 0 ? (
               <p className="mt-2 text-xs text-slate-400">暂无作文</p>
             ) : (
-              <ul className="mt-2 flex flex-col gap-2">
-                {essays.map((essay) => (
+              <ul data-testid="single-layout-list" className="mt-2 flex max-h-[55vh] flex-col gap-2 overflow-y-auto pr-1">
+                {orderedEssays.map((essay) => (
                   <li key={essay.id} className="flex items-center justify-between gap-2">
                     <span className="truncate text-sm text-slate-700">
                       {essay.student_name ?? `#${essay.student_id}`}

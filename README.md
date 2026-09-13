@@ -3,12 +3,12 @@
 高中语文教师的作文「收 / 改 / 成册」工作台：
 
 > 手机拍照上传 → 双引擎 OCR 识别 → 字符级 diff 标疑 → 老师左右分栏校对定稿 →
-> 三套模板成册导出 PDF → 课堂投屏表彰 → 评分精选 → 三榜表彰 → 家长分享。
+> 五套模板成册导出 PDF → 课堂投屏表彰 → 评分精选 → 三榜表彰 → 家长分享。
 
-一期（T01–T05）已全部交付：项目基础设施、数据层与识别流水线、校对环前端、
+一期（T01–T05）已完成自动化实现，但仍需真实老师验收：项目基础设施、数据层与识别流水线、校对环前端、
 成册导出与投屏、集成联调与部署。
 
-二期（v1.3：评分精选 / 三榜表彰 / 成长档案 / 家长分享）已按 PRD v1.3 开发完成并过六段门禁，
+二期（v1.3：评分精选 / 三榜表彰 / 成长档案 / 家长分享）已完成自动化实现；v1.4 增加名单导入、网格选人、校对展示、统一排序和投屏优化。
 老师侧真机复测见 `docs/真机验收清单.md` §3B（18 条，待勾）。
 
 ---
@@ -29,7 +29,7 @@ essay-workbench/
 │   │   ├── routers/             # auth / issues / students / essays / photos / exports
 │   │   ├── pipeline/            # engine_adapter / confidence / diff / worker
 │   │   └── render/              # Jinja2 模板 + Playwright PDF
-│   ├── assets/templates/        # 三套成册模板 HTML（elegant/playful/formal）
+│   ├── assets/templates/        # 五套成册模板 HTML
 │   ├── config/                  # *.example（真实配置放数据目录，不进 Git）
 │   ├── data/                    # 本机数据目录（gitignore；含照片/SQLite/密钥）
 │   └── tests/                   # pytest（覆盖率门禁 >= 80%）
@@ -74,7 +74,7 @@ npm run dev       # http://127.0.0.1:5173（/api 已代理到 8000）
 npm run build     # 产出 dist/，后端启动时会自动静态托管（单端口部署）
 ```
 
-### 3. 导入学生名单（一期无管理界面）
+### 3. 导入学生名单
 
 ```bash
 # 名单为 CSV「学号,姓名」，见 deploy/students.sample.csv
@@ -329,11 +329,14 @@ nginx -t && systemctl reload nginx
 | POST | `/api/auth/login` | 口令登录，返回 Bearer token |
 | GET/POST/PATCH/DELETE | `/api/issues[/{id}]` | 期数管理（删除仅限空期） |
 | GET | `/api/students` | 启用学生列表 |
+| GET | `/api/students/import-template` | 下载 xlsx/csv 名单模板 |
+| POST | `/api/students/import-file` | 解析名单并返回预览 |
+| POST | `/api/students/import-file/confirm` | 确认并事务导入预览有效行 |
 | POST | `/api/issues/{id}/essays` | 多图上传（202，异步识别） |
 | GET | `/api/issues/{id}/essays` | 状态看板数据 |
 | GET/PATCH | `/api/essays/{id}` | 详情 / 校对定稿 |
 | GET | `/api/photos/{id}/file` | 原片二进制（带鉴权，防目录穿越） |
-| GET | `/api/exports/templates` | 三套模板清单 |
+| GET | `/api/exports/templates` | 五套模板清单 |
 | GET | `/api/exports/{id}/preview` | 整册 HTML（预览） |
 | GET | `/api/exports/{id}/present` | 投屏数据 |
 | POST | `/api/exports/{id}` | 整册 PDF（未全定稿 409） |
@@ -395,7 +398,7 @@ uvicorn `--port`；nginx 只反代到 `127.0.0.1:8000`，改端口时同步改 `
 
 ## 一期验收产物
 
-见 `artifacts/`：三套模板样例 PDF、投屏视图与校对页截图、`端到端验收记录.md`、
+见 `artifacts/`：模板样例 PDF、投屏视图与校对页截图、`端到端验收记录.md`、
 `smoke_report.json`（真实引擎冒烟的逐步耗时与识别质量观察）。
 
 v1.2 另附三份文档：
@@ -423,5 +426,5 @@ cd backend && PYTHONPATH= .venv/Scripts/python.exe ../deploy/bench_export.py --k
 ```
 
 它在临时数据目录里造 45 名学生的 45 篇已定稿作文（正文为合成句池），起一个关掉 Worker 的服务，
-走真实 HTTP 端点给三套模板与单篇版式计时；任一套超过 `--limit-seconds`（默认 60）就以退出码 1 结束，
+走真实 HTTP 端点给五套模板与单篇版式计时；任一套超过 `--limit-seconds`（默认 60）就以退出码 1 结束，
 可直接当门禁。`--keep` 会把 PDF 留在临时目录里供目视（页数应为 49~50）。

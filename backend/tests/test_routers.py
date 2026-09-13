@@ -710,6 +710,58 @@ async def test_import_students_batch(
     assert by_no["S203"] == "林涛"
 
 
+async def test_student_file_import_previews_csv_without_writing(
+    client: AsyncClient,
+    auth_headers: dict[str, str],
+) -> None:
+    response = await client.post(
+        "/api/students/import-file",
+        files={"file": ("roster.csv", "学生学号,学生姓名\nS301,赵六\nS302,钱七\n", "text/csv")},
+        headers=auth_headers,
+    )
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["valid_count"] == 2
+    assert data["invalid_count"] == 0
+    assert [row["student_no"] for row in data["rows"]] == ["S301", "S302"]
+    assert (await client.get("/api/students", headers=auth_headers)).json()["data"] == []
+
+
+async def test_student_file_import_confirmation_writes_clean_preview_rows(
+    client: AsyncClient,
+    auth_headers: dict[str, str],
+) -> None:
+    response = await client.post(
+        "/api/students/import-file/confirm",
+        json={"students": [{"student_no": "S305", "name": "周八"}]},
+        headers=auth_headers,
+    )
+    assert response.status_code == 200
+    assert response.json()["data"] == {"created": 1, "updated": 0}
+    listing = (await client.get("/api/students", headers=auth_headers)).json()["data"]
+    assert [(item["student_no"], item["name"]) for item in listing] == [("S305", "周八")]
+
+
+async def test_student_file_import_reports_errors_and_template_downloads(
+    client: AsyncClient,
+    auth_headers: dict[str, str],
+) -> None:
+    response = await client.post(
+        "/api/students/import-file",
+        files={"file": ("bad.csv", "学号,姓名\nS401,\nS401,\nS401,重复\n", "text/csv")},
+        headers=auth_headers,
+    )
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["invalid_count"] == 2
+    assert len(data["errors"]) == 2
+
+    template = await client.get("/api/students/import-template?format=xlsx", headers=auth_headers)
+    assert template.status_code == 200
+    assert "spreadsheetml" in template.headers["content-type"]
+    assert len(template.content) > 100
+
+
 async def test_student_write_requires_auth(client: AsyncClient) -> None:
     assert (
         await client.post("/api/students", json={"student_no": "S1", "name": "x"})

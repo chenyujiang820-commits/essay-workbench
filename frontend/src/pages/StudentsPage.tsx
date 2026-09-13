@@ -4,7 +4,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { ApiError, api } from "../api/client";
-import type { Student } from "../api/types";
+import type { Student, StudentImportPreview } from "../api/types";
+import { triggerDownload } from "../lib/download";
 
 /** 解析粘贴文本：每行「学号,姓名」或「学号 姓名」（支持中英文逗号 / 制表符）。 */
 export function parseRosterText(text: string): { student_no: string; name: string }[] {
@@ -43,6 +44,9 @@ export default function StudentsPage() {
 
   const [importText, setImportText] = useState("");
   const [showImport, setShowImport] = useState(false);
+  const [importFile, setImportFile] = useState<File | null>(null);
+  const [filePreview, setFilePreview] = useState<StudentImportPreview | null>(null);
+  const [previewing, setPreviewing] = useState(false);
 
   const parsedImport = useMemo(() => parseRosterText(importText), [importText]);
 
@@ -129,6 +133,55 @@ export default function StudentsPage() {
     }
   }
 
+  async function handleFilePreview(): Promise<void> {
+    if (!importFile) {
+      setError("请先选择 xlsx 或 csv 文件");
+      return;
+    }
+    setPreviewing(true);
+    setError("");
+    setNotice("");
+    try {
+      setFilePreview(await api.previewStudentImport(importFile));
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "文件解析失败，请重试");
+    } finally {
+      setPreviewing(false);
+    }
+  }
+
+  async function handleFileImport(): Promise<void> {
+    if (!filePreview || filePreview.invalid_count > 0 || filePreview.rows.length === 0) {
+      setError("文件存在错误行，修正后重新预览才能导入");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const result = await api.confirmStudentImport(
+        filePreview.rows.map(({ student_no, name }) => ({ student_no, name })),
+      );
+      setNotice(`导入完成：新增 ${result.created} 人，更新 ${result.updated} 人。`);
+      setImportFile(null);
+      setFilePreview(null);
+      await load();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "导入失败，请重试");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleTemplate(format: "xlsx" | "csv"): Promise<void> {
+    try {
+      const blob = await api.downloadStudentTemplate(format);
+      triggerDownload(blob, `学生名单模板.${format}`);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "模板下载失败，请重试");
+    }
+  }
+
   return (
     <main className="mx-auto max-w-3xl px-4 py-6 sm:px-6 sm:py-8">
       <header className="flex flex-wrap items-center justify-between gap-3">
@@ -161,6 +214,44 @@ export default function StudentsPage() {
 
       {showImport ? (
         <section className="mt-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-sm font-medium text-slate-700">表格导入</span>
+            <button type="button" data-testid="download-xlsx" onClick={() => void handleTemplate("xlsx")} className="rounded border border-slate-300 px-2 py-1 text-xs text-slate-700">下载 Excel 模板</button>
+            <button type="button" data-testid="download-csv" onClick={() => void handleTemplate("csv")} className="rounded border border-slate-300 px-2 py-1 text-xs text-slate-700">下载 CSV 模板</button>
+          </div>
+          <label className="mt-3 block text-sm text-slate-700">
+            选择名单文件
+            <input
+              data-testid="import-file"
+              type="file"
+              accept=".xlsx,.csv,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+              className="mt-1 block w-full text-sm"
+              onChange={(event) => {
+                setImportFile(event.target.files?.[0] ?? null);
+                setFilePreview(null);
+              }}
+            />
+          </label>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <button type="button" disabled={previewing || !importFile} onClick={() => void handleFilePreview()} className="rounded-md border border-slate-300 px-3 py-1.5 text-sm text-slate-700 disabled:opacity-50">
+              {previewing ? "解析中…" : "预览文件"}
+            </button>
+            {filePreview ? (
+              <span data-testid="file-preview-summary" className="text-xs text-slate-500">
+                可导入 {filePreview.valid_count} 条，新增 {filePreview.created_count}，更新 {filePreview.updated_count}，错误 {filePreview.invalid_count} 条
+              </span>
+            ) : null}
+          </div>
+          {filePreview?.errors.length ? (
+            <ul data-testid="file-preview-errors" className="mt-2 space-y-1 text-xs text-rose-600">
+              {filePreview.errors.map((item) => <li key={`${item.row}-${item.message}`}>第 {item.row} 行：{item.message}</li>)}
+            </ul>
+          ) : null}
+          {filePreview && filePreview.invalid_count === 0 ? (
+            <button type="button" data-testid="confirm-file-import" disabled={busy} onClick={() => void handleFileImport()} className="mt-3 rounded-md bg-slate-900 px-4 py-1.5 text-sm font-medium text-white disabled:opacity-60">
+              {busy ? "导入中…" : "确认导入表格"}
+            </button>
+          ) : null}
           <p className="text-sm font-medium text-slate-700">粘贴名单（每行一条：学号,姓名）</p>
           <textarea
             data-testid="import-text"

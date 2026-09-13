@@ -1,6 +1,6 @@
-# 「班级作文工作台」一期 系统设计 + 任务分解
+# 「班级作文工作台」系统设计 + 任务分解
 
-架构师：高见远（Bob）｜依据：PRD v1.1（终审冻结版）｜2026-09-10
+架构师：高见远（Bob）｜依据：PRD v1.4（一期基线 + 优化增量）｜2026-09-10
 主理人裁定：5 项待明确事项已拍板（见文末附录）
 
 ---
@@ -14,7 +14,7 @@
 2. 双引擎异步识别流水线：慢通道 504 → 必须长超时 + 重试 + **降级不阻塞**；
 3. 识别引擎可替换（适配器模式，配置驱动，零硬编码）；
 4. 左右分栏逐句校对，照片缩放 + 可编辑文本 + 存疑高亮（移动端也要能操作）；
-5. 3 套模板成册 + 中文 PDF 导出（Windows 开发、Linux 部署，跨平台是关键）；
+5. 5 套模板成册 + 中文 PDF 导出（Windows 开发、Linux 部署，跨平台是关键）；
 6. 校对铁律的流程级强制（未校对不可成册）。
 
 **选型决策**
@@ -58,12 +58,14 @@ essay-workbench/
 │   │   │   ├── diff.py            # 字符级 diff（difflib 封装 → 段落 JSON）
 │   │   │   └── confidence.py      # 置信度计算口径
 │   │   └── render/
-│   │       ├── templates.py       # Jinja2 环境与模板数据组装（3 套模板统一数据结构）
+│   │       ├── templates.py       # Jinja2 环境与模板数据组装（5 套模板统一数据结构）
 │   │       └── pdf.py             # Playwright 生成 PDF（A4 单页/整册）
-│   ├── assets/templates/          # 3 套成册模板（部署时可被数据目录同名文件覆盖）
+│   ├── assets/templates/          # 5 套成册模板（部署时可被数据目录同名文件覆盖）
 │   │   ├── elegant.html           # 素雅校刊风
 │   │   ├── playful.html           # 活泼童趣风
-│   │   └── formal.html            # 正式文集风
+│   │   ├── formal.html            # 正式文集风
+│   │   ├── clean.html             # 清爽阅读风
+│   │   └── reading.html           # 纸上阅读风
 │   └── tests/
 │       ├── conftest.py            # 临时 SQLite + 临时数据目录 fixture
 │       ├── test_pipeline.py       # 流水线状态机、降级、diff、置信度单测
@@ -91,7 +93,7 @@ essay-workbench/
 │           ├── PhotoViewer.tsx    # react-zoom-pan-pinch 原片查看
 │           ├── DiffText.tsx       # diff 段落渲染 + 存疑黄底 + 可编辑
 │           ├── StatusBadge.tsx    # 任务状态徽标
-│           ├── TemplatePicker.tsx # 3 套模板一键切换
+│           ├── TemplatePicker.tsx # 5 套模板一键切换
 │           └── Pager.tsx          # 投屏翻页（键盘 ←/→ + 触屏滑动）
 └── deploy/
     ├── systemd.service            # uvicorn 服务单元
@@ -186,7 +188,7 @@ CREATE TABLE recognition_tasks (
 - **T01 项目基础设施**：后端骨架（FastAPI+配置+SQLite+口令登录）+ 前端骨架（Vite+React+Tailwind+路由+登录页）+ verify.sh 验证链。验收：test_auth 绿 + pnpm build 通过 + 登录契约测试绿。
 - **T02 数据层 + 识别流水线**：全部 ORM（含预留字段）+ 上传 API + 适配器（配置驱动、httpx mock 可测）+ 置信度 + 字符级 diff + asyncio Worker（504 重试/超时/降级）。验收：mock 双引擎状态机全路径测试（含降级）绿，覆盖率 ≥80%。
 - **T03 校对环 + 作文管理前端**：状态看板、拍照上传（手机 capture）、左右分栏校对、存疑黄标、低置信横幅、铁律提示、PATCH 定稿、移动端适配。验收：校对走查 ≤3 分钟；"未校对不可成册" 409 测试绿。
-- **T04 成册导出 + 投屏视图**：3 套 Jinja2 模板、Playwright 导出、排序（学号/姓名/评分禁用）、投屏横版翻页。验收：45 篇全定稿→导出 ≤1 分钟；1920×1080 无缩放可读。
+- **T04 成册导出 + 投屏视图**：5 套 Jinja2 模板、Playwright 导出、排序（学号/姓名/评分/精选优先）、投屏横版翻页。验收：45 篇全定稿→导出 ≤1 分钟；1920×1080 无缩放可读。
 - **T05 集成联调 + 部署交付**：真实引擎冒烟、端到端用例、Linux 部署文档、覆盖率门禁收口。验收：验收清单全绿、覆盖率 ≥80%、服务器跑通完整周期。
 
 依赖：T01→T02→T03→{T04, T05 并行收口}
@@ -292,6 +294,13 @@ CREATE TABLE recognition_tasks (
   真实识别可用率 ≥85%）属线下人工项，代码无法自证。
 
 ### C.6 二次审计补齐（2026-09-12 晚 · AC-6 与 OPT-01）
+
+### C.7 v1.4.0 优化增量
+
+- 学生名单文件先通过 `POST /api/students/import-file` 解析预览，再由 `POST /api/students/import-file/confirm` 整批事务写入；旧的 JSON `/import` 保持兼容。
+- 成册模板清单扩展为五套，`selected_score` 成为统一的精选优先排序口径；前端预览和单篇列表都消费同一排序结果。
+- 投屏继续以 `final_text` 优先，并对未定稿识别稿显式标记；目录、上一篇/下一篇和投影态都属于展示层，不改变识别数据。
+- v1.4 的实现不引入数据库迁移：自然排序、25 字换行和评语/评分均在现有接口或展示层完成。
 
 第一轮把 AC-6 只做成了「后端四分支 + 校对页入口」，把 OPT-01 只做成了「面板默认展开」。
 两者在 PRD 里的原文都更多，本轮补齐：

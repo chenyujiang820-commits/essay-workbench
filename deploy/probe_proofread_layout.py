@@ -37,7 +37,9 @@ SNAP_JS = """() => {
     compareChars: compare ? (compare.innerText || "").trim().length : -1,
     suspectCounter: counter ? counter.innerText : null,
     docScrollHeight: se.scrollHeight,
-    innerHeight: window.innerHeight
+    innerHeight: window.innerHeight,
+    docScrollWidth: se.scrollWidth,
+    innerWidth: window.innerWidth
   };
 }"""
 
@@ -173,8 +175,16 @@ def check(width: int, height: int, data: dict[str, Any], essay: int) -> list[str
         problems.append("识别对照不可见")
     if data["compareChars"] <= 0:
         problems.append("识别对照无内容")
-    if data["textareaHeight"] < 120:
+    if data["textareaHeight"] < (180 if width >= 1024 else 120):
         problems.append("定稿框仅 " + str(data["textareaHeight"]) + "px")
+    if data.get("docScrollWidth", width) > data.get("innerWidth", width) + 1:
+        problems.append(
+            "页面出现横向溢出（页面宽 "
+            + str(data.get("docScrollWidth"))
+            + "px，视口宽 "
+            + str(data.get("innerWidth"))
+            + "px）"
+        )
     after = data.get("afterScroll") or {}
     tail = data.get("tail") or {}
     if not after.get("inView"):

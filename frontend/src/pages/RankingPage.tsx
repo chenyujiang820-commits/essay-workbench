@@ -153,7 +153,7 @@ interface BoardSectionProps {
   visibility: BoardConfig["visibility"];
 }
 
-function BoardSection({ boardKey, rows, disabled, visibility }: BoardSectionProps) {
+function BoardSection({ boardKey, rows, disabled, visibility, projection = false }: BoardSectionProps & { projection?: boolean }) {
   return (
     <section
       data-testid={"board-" + boardKey}
@@ -192,7 +192,7 @@ function BoardSection({ boardKey, rows, disabled, visibility }: BoardSectionProp
                 className="min-w-0 flex-1 truncate text-slate-900 hover:underline"
                 title={row.main}
               >
-                {row.main}
+                {projection ? row.main.replace(/《.*》$/, "") : row.main}
               </Link>
               {row.badge ? (
                 <span
@@ -224,6 +224,7 @@ export default function RankingPage() {
   const [error, setError] = useState("");
   const [posterBusy, setPosterBusy] = useState(false);
   const [posterError, setPosterError] = useState("");
+  const [projection, setProjection] = useState(false);
 
   const load = useCallback(async () => {
     if (!validId) {
@@ -328,6 +329,14 @@ export default function RankingPage() {
           >
             {posterBusy ? "海报导出中…" : "导出本周精选海报"}
           </button>
+          <button
+            type="button"
+            data-testid="ranking-projection"
+            onClick={() => setProjection((value) => !value)}
+            className={GHOST_BUTTON + (projection ? " bg-slate-900 text-white" : "")}
+          >
+            {projection ? "退出投影态" : "投影态"}
+          </button>
         </div>
       </header>
 
@@ -347,7 +356,7 @@ export default function RankingPage() {
         </p>
       ) : null}
 
-      <div className="mt-4 grid gap-4 lg:grid-cols-2">
+      <div className={"mt-4 grid gap-4 lg:grid-cols-2" + (projection ? " text-lg" : "")}>
         {boards.map((board) => (
           <div key={board.boardKey} className={board.wide ? "lg:col-span-2" : ""}>
             <BoardSection
@@ -355,6 +364,7 @@ export default function RankingPage() {
               rows={board.rows}
               disabled={data.disabled.includes(board.boardKey)}
               visibility={data.config[board.boardKey]?.visibility ?? "teacher"}
+              projection={projection}
             />
           </div>
         ))}

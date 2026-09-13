@@ -474,6 +474,36 @@ describe("ProofreadPage", () => {
     expect(screen.getByTestId("pane-text").textContent).toContain("存疑 1");
   });
 
+  it("keeps the proofread flow ordered as final text, comparison, then teacher review", async () => {
+    renderEssay({ photos: noDiffPhotos, low_confidence: 0 });
+    await screen.findByTestId("final-text");
+
+    const editor = screen.getByTestId("final-text");
+    const comparison = screen.getByTestId("diff-details");
+    const review = screen.getByTestId("teacher-review");
+
+    expect(comparison.compareDocumentPosition(editor) & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy();
+    expect(review.compareDocumentPosition(comparison) & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy();
+  });
+
+  it("keeps the teacher review compact by default and supports focus restore", async () => {
+    renderProofread();
+    await screen.findByTestId("teacher-review");
+
+    const review = screen.getByTestId("teacher-review");
+    const focus = screen.getByTestId("review-focus");
+    expect(review.className).toContain("lg:col-start-1");
+    expect(review.className).toContain("lg:row-start-2");
+    expect(focus.textContent).toBe("放大");
+    fireEvent.click(focus);
+    expect(focus.textContent).toBe("还原");
+    expect(focus.getAttribute("aria-pressed")).toBe("true");
+    expect(review.getAttribute("style")).toContain("position: fixed");
+    fireEvent.click(focus);
+    expect(focus.textContent).toBe("放大");
+    expect(focus.getAttribute("aria-pressed")).toBe("false");
+  });
+
   it("点存疑处会连页签一起切到原片：手机端原片在另一个页签，只改 seq 等于没反应", async () => {
     renderEssay({ photos: noDiffPhotos, low_confidence: 0 });
     await screen.findByTestId("final-text");
